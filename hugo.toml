@@ -1,0 +1,69 @@
+baseURL = 'https://xuezhaojun.github.io/'
+languageCode = 'zh-cn'
+title = 'Zhao Xue'
+theme = 'PaperMod'
+[pagination]
+  pagerSize = 10
+
+enableRobotsTXT = true
+
+[params]
+  env = "production"
+  author = "Zhao Xue"
+  description = "Cloud Native Engineer | K8s Multi-Cluster | AI Agent Builder"
+  defaultTheme = "auto"
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+  ShowToc = true
+  TocOpen = false
+
+  [params.homeInfoParams]
+    Title = "Zhao Xue"
+    Content = """
+Senior Software Engineer — 5 年 Kubernetes 多集群管理平台经验。
+
+专注于云原生架构、AI Agent 工程化实践。
+"""
+
+  [[params.socialIcons]]
+    name = "github"
+    url = "https://github.com/xuezhaojun"
+
+[params.cover]
+  hiddenInSingle = true
+
+[markup]
+  [markup.highlight]
+    style = "dracula"
+    lineNos = false
+    noClasses = false
+
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+
+[outputs]
+  home = ["HTML", "RSS", "JSON"]
+
+[[menus.main]]
+  name = "Blog"
+  url = "/posts/"
+  weight = 1
+
+[[menus.main]]
+  name = "About"
+  url = "/about/"
+  weight = 2
+
+[[menus.main]]
+  name = "Search"
+  url = "/search/"
+  weight = 3
+
+[[menus.main]]
+  name = "Tags"
+  url = "/tags/"
+  weight = 4
