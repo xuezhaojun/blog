@@ -18,9 +18,8 @@ Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster 
 
 ### Technical Focus
 
-- Kubernetes / OpenShift / Multi-Cluster Management
-- Go / Operator / CRD / gRPC
-- AI Agent Engineering (KubeOpenCode, Repo-as-Agent)
+- Kubernetes / Multi-Cluster Management / Go
+- Agentic Engineering
 
 ### Certifications
 
@@ -29,10 +28,8 @@ Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster 
 
 ### Education
 
-| | |
-|---|---|
-| ![HKUST](/images/hkust.png) | **HKUST** — Master of Information Technology |
-| ![SYSU](/images/sysu.png) | **SYSU** — Bachelor of Software Engineering |
+<img src="/images/hkust.png" alt="HKUST" style="height:1.2em;vertical-align:middle;margin-right:0.4em;">**HKUST** — Master of Information Technology  
+<img src="/images/sysu.gif" alt="SYSU" style="height:1.2em;vertical-align:middle;margin-right:0.4em;">**SYSU** — Bachelor of Software Engineering
 
 ### Contact
 
