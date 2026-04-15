@@ -1,4 +1,4 @@
-baseURL = 'https://xuezhaojun.github.io/'
+baseURL = 'https://xuezhaojun.github.io/blog/'
 languageCode = 'zh-cn'
 title = 'Zhao Xue'
 theme = 'PaperMod'
