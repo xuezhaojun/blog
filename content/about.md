@@ -23,6 +23,11 @@ ShowToc: false
 
 <p><img src="/images/redhat.png" alt="Red Hat" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>Red Hat</b> — Senior Software Engineer (2021–2026)</p>
 
+### Education
+
+<p><img src="/images/hkust.png" alt="HKUST" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>HKUST</b> — Master of Information Technology</p>
+<p><img src="/images/sysu.gif" alt="SYSU" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>SYSU</b> — Bachelor of Software Engineering</p>
+
 ### Certifications
 
 - CKA (Certified Kubernetes Administrator)
@@ -30,8 +35,3 @@ ShowToc: false
 
 ![CKA Certificate](/images/cka.jpg)
 ![PSM II Certificate](/images/psm2.png)
-
-### Education
-
-<p><img src="/images/hkust.png" alt="HKUST" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>HKUST</b> — Master of Information Technology</p>
-<p><img src="/images/sysu.gif" alt="SYSU" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>SYSU</b> — Bachelor of Software Engineering</p>
