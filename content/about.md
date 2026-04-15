@@ -29,8 +29,10 @@ Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster 
 
 ### Education
 
-- M.Sc., Hong Kong University of Science and Technology
-- B.Sc., Sun Yat-sen University
+| | |
+|---|---|
+| ![HKUST](/images/hkust.png) | **HKUST** — Master of Information Technology |
+| ![SYSU](/images/sysu.png) | **SYSU** — Bachelor of Software Engineering |
 
 ### Contact
 
