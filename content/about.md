@@ -10,8 +10,8 @@ ShowToc: false
 
 ### Technical Focus
 
-- Kubernetes / Multi-Cluster Management / Go — ACM | OCM
-- Agentic Engineering — KubeOpenCode
+- Kubernetes / Multi-Cluster Management / Go — [ACM](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes) | [OCM](https://github.com/open-cluster-management-io)
+- Agentic Engineering — [KubeOpenCode](https://github.com/kubeopencode/kubeopencode)
 
 ### Experience
 
