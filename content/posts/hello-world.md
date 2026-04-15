@@ -2,14 +2,14 @@
 title: "Hello World"
 date: 2026-04-15
 draft: true
-tags: ["随笔"]
-summary: "博客的第一篇文章，记录建站初衷。"
+tags: ["meta"]
+summary: "The first post — why I started this blog."
 ---
 
-这是博客的第一篇文章。
+This is the first post on this blog.
 
-建这个博客的目的很简单：把过去几年做云原生和 K8s 多集群管理的经验系统性地整理出来。
+The goal is simple: systematically document years of hands-on experience with cloud-native infrastructure and Kubernetes multi-cluster management.
 
-不是教程搬运，而是一线工程师的深度实践复盘。
+Not tutorial reposts — real-world engineering deep dives from the trenches.
 
-更多内容，敬请期待。
+Stay tuned.

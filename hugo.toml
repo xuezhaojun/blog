@@ -1,5 +1,5 @@
 baseURL = 'https://xuezhaojun.github.io/'
-languageCode = 'zh-cn'
+languageCode = 'en-us'
 title = 'Zhao Xue'
 theme = 'PaperMod'
 [pagination]
@@ -23,9 +23,9 @@ enableRobotsTXT = true
   [params.homeInfoParams]
     Title = "Zhao Xue"
     Content = """
-Senior Software Engineer — 5 年 Kubernetes 多集群管理平台经验。
+Senior Software Engineer with 5 years of experience building Kubernetes multi-cluster management platforms.
 
-专注于云原生架构、AI Agent 工程化实践。
+Focused on cloud-native architecture and AI agent engineering.
 """
 
   [[params.socialIcons]]

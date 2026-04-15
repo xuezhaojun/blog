@@ -8,30 +8,30 @@ ShowToc: false
 
 ## Zhao Xue
 
-Senior Software Engineer，5 年 Kubernetes 多集群管理平台开发经验。
+Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster management platform development.
 
-### 工作经历
+### Experience
 
-- **Red Hat** — ACM (Advanced Cluster Management) 核心开发
-  - 负责 Cluster Proxy、managed-import-controller 等核心模块
-  - 参与 OCM 开源社区建设，主导 website 重构和 mono repo 合并
+- **Red Hat** — Core developer on ACM (Advanced Cluster Management)
+  - Owned Cluster Proxy, managed-import-controller, and other core modules
+  - Led OCM open-source community efforts including website rebuild and mono repo consolidation
 
-### 技术领域
+### Technical Focus
 
 - Kubernetes / OpenShift / Multi-Cluster Management
 - Go / Operator / CRD / gRPC
 - AI Agent Engineering (KubeOpenCode, Repo-as-Agent)
 
-### 认证
+### Certifications
 
 - CKA (Certified Kubernetes Administrator)
 - PSM II (Professional Scrum Master II)
 
-### 教育
+### Education
 
-- 香港科技大学 硕士
-- 中山大学 本科
+- M.Sc., Hong Kong University of Science and Technology
+- B.Sc., Sun Yat-sen University
 
-### 联系方式
+### Contact
 
 - GitHub: [xuezhaojun](https://github.com/xuezhaojun)
