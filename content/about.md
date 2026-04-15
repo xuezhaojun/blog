@@ -22,6 +22,7 @@ ShowToc: false
 - CKA (Certified Kubernetes Administrator)
 - PSM II (Professional Scrum Master II)
 
+![CKA Certificate](/images/cka.jpg)
 ![PSM II Certificate](/images/psm2.png)
 
 ### Education
