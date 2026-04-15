@@ -8,8 +8,6 @@ ShowToc: false
 
 ## Zhao Xue
 
-Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster management platform development.
-
 ### Experience
 
 - **Red Hat** — Core developer on ACM (Advanced Cluster Management)
