@@ -8,16 +8,16 @@ ShowToc: false
 
 ## Zhao Xue
 
+### Technical Focus
+
+- Kubernetes / Multi-Cluster Management / Go — ACM | OCM
+- Agentic Engineering — KubeOpenCode
+
 ### Experience
 
 - **Red Hat** — Core developer on ACM (Advanced Cluster Management)
   - Owned Cluster Proxy, managed-import-controller, and other core modules
   - Led OCM open-source community efforts including website rebuild and mono repo consolidation
-
-### Technical Focus
-
-- Kubernetes / Multi-Cluster Management / Go
-- Agentic Engineering
 
 ### Certifications
 
