@@ -34,4 +34,6 @@ Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster 
 
 ### Contact
 
+- Email: xuezhaokeepgoing@gmail.com
+- Phone: +86-15626173020
 - GitHub: [xuezhaojun](https://github.com/xuezhaojun)
