@@ -28,8 +28,9 @@ Senior Software Engineer with 5 years of experience in Kubernetes multi-cluster 
 
 ### Education
 
-<img src="/images/hkust.png" alt="HKUST" style="height:1.2em;vertical-align:middle;margin-right:0.4em;">**HKUST** — Master of Information Technology  
-<img src="/images/sysu.gif" alt="SYSU" style="height:1.2em;vertical-align:middle;margin-right:0.4em;">**SYSU** — Bachelor of Software Engineering
+<span><img src="/images/hkust.png" alt="HKUST" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>HKUST</b> — Master of Information Technology</span>
+<br>
+<span><img src="/images/sysu.gif" alt="SYSU" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>SYSU</b> — Bachelor of Software Engineering</span>
 
 ### Contact
 
