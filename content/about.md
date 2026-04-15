@@ -22,6 +22,8 @@ ShowToc: false
 - CKA (Certified Kubernetes Administrator)
 - PSM II (Professional Scrum Master II)
 
+![PSM II Certificate](/images/psm2.png)
+
 ### Education
 
 <p><img src="/images/hkust.png" alt="HKUST" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>HKUST</b> — Master of Information Technology</p>
