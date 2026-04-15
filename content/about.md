@@ -15,9 +15,7 @@ ShowToc: false
 
 ### Experience
 
-- **Red Hat** — Core developer on ACM (Advanced Cluster Management)
-  - Owned Cluster Proxy, managed-import-controller, and other core modules
-  - Led OCM open-source community efforts including website rebuild and mono repo consolidation
+<p><img src="/images/redhat.png" alt="Red Hat" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>Red Hat</b> — Senior Software Engineer (2021–2026)</p>
 
 ### Certifications
 
