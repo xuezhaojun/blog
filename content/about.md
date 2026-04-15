@@ -8,6 +8,12 @@ ShowToc: false
 
 ## Zhao Xue
 
+### Contact
+
+- Email: xuezhaokeepgoing@gmail.com
+- Phone: +86-15626173020
+- GitHub: [xuezhaojun](https://github.com/xuezhaojun)
+
 ### Technical Focus
 
 - Kubernetes / Multi-Cluster Management / Go — [ACM](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes) | [OCM](https://github.com/open-cluster-management-io)
@@ -29,9 +35,3 @@ ShowToc: false
 
 <p><img src="/images/hkust.png" alt="HKUST" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>HKUST</b> — Master of Information Technology</p>
 <p><img src="/images/sysu.gif" alt="SYSU" style="height:1.4em;vertical-align:middle;margin-right:0.4em;"><b>SYSU</b> — Bachelor of Software Engineering</p>
-
-### Contact
-
-- Email: xuezhaokeepgoing@gmail.com
-- Phone: +86-15626173020
-- GitHub: [xuezhaojun](https://github.com/xuezhaojun)
