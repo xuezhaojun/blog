@@ -30,8 +30,13 @@ ShowToc: false
 
 ### Certifications
 
-- CKA (Certified Kubernetes Administrator)
-- PSM II (Professional Scrum Master II)
-
-![CKA Certificate](/images/cka.jpg)
-![PSM II Certificate](/images/psm2.png)
+<div class="cert-cards">
+<a class="cert-card" href="/images/cka.jpg" target="_blank">
+<img src="/images/cka.jpg" alt="CKA Certificate">
+<div class="cert-label">CKA</div>
+</a>
+<a class="cert-card" href="/images/psm2.png" target="_blank">
+<img src="/images/psm2.png" alt="PSM II Certificate">
+<div class="cert-label">PSM II</div>
+</a>
+</div>
