@@ -118,12 +118,12 @@ graph LR
 
 ```mermaid
 graph TD
-    subgraph 本地队列 - 无锁访问，快
+    subgraph local["本地队列 (无锁访问)"]
         P0[P0] --- G1[G1] & G2[G2] & G3[G3]
         P1[P1] --- G4[G4] & G5[G5]
         P2[P2] --- G6[G6]
     end
-    subgraph 全局队列 - 需要加锁，慢
+    subgraph global["全局队列 (需要加锁)"]
         GQ[全局队列] --- G7[G7] & G8[G8] & G9[G9] & G10[G10]
     end
     P0 -.->|本地满了溢出| GQ
