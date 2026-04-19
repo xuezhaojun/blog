@@ -3,8 +3,8 @@ title: "从一次 K8s Controller OOM 聊起：彻底搞懂 Go GMP 调度模型"
 date: 2026-04-18
 draft: false
 tags: ["Go", "并发", "GMP", "Kubernetes", "性能调优", "中文"]
-series: "Go 并发原理实战"
 summary: "不讲干巴巴的八股文。从一个真实的 Kubernetes controller 内存暴涨 + 延迟飙高的线上事故出发，用 pprof 数据倒推 GMP 调度模型的每个概念，让你理解为什么要学这些东西。"
+weight: 1
 ShowToc: true
 TocOpen: true
 ShowReadingTime: true

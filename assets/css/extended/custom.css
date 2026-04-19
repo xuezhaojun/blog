@@ -40,3 +40,126 @@
     width: 100%;
   }
 }
+
+/* ── Collection styles ── */
+
+/* Book TOC chapter list */
+.collection-toc {
+  margin-top: 1.5rem;
+}
+
+.collection-chapter {
+  border-bottom: 1px solid var(--border);
+}
+
+.collection-chapter:last-child {
+  border-bottom: none;
+}
+
+.collection-chapter-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.2rem 0.5rem;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.collection-chapter-link:hover {
+  background-color: var(--code-bg);
+}
+
+.collection-chapter-number {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--secondary);
+  min-width: 2rem;
+  padding-top: 0.1rem;
+}
+
+.collection-chapter-info {
+  flex: 1;
+}
+
+.collection-chapter-title {
+  margin: 0 0 0.3rem 0;
+  font-size: 1.1rem;
+  line-height: 1.4;
+}
+
+.collection-chapter-summary {
+  margin: 0 0 0.4rem 0;
+  font-size: 0.9rem;
+  color: var(--secondary);
+  line-height: 1.5;
+}
+
+.collection-chapter-meta {
+  font-size: 0.85rem;
+  color: var(--secondary);
+}
+
+/* Collection badge on single article page */
+.collection-badge {
+  margin-bottom: 0.5rem;
+}
+
+.collection-badge a {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+
+.collection-badge a:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Chapter prev/next navigation */
+.collection-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.collection-nav-prev,
+.collection-nav-next {
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: inherit;
+  max-width: 48%;
+}
+
+.collection-nav-next {
+  text-align: right;
+  margin-left: auto;
+}
+
+.collection-nav-label {
+  font-size: 0.8rem;
+  color: var(--secondary);
+  margin-bottom: 0.2rem;
+}
+
+.collection-nav-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+a.collection-nav-prev:hover .collection-nav-title,
+a.collection-nav-next:hover .collection-nav-title {
+  color: var(--primary);
+}

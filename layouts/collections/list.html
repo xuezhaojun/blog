@@ -1,0 +1,60 @@
+{{- define "main" }}
+
+{{- if .Title }}
+<header class="page-header">
+  {{- partial "breadcrumbs.html" . }}
+  <h1>{{ .Title }}</h1>
+  {{- if .Description }}
+  <div class="post-description">
+    {{ .Description | markdownify }}
+  </div>
+  {{- end }}
+</header>
+{{- end }}
+
+{{- if .Content }}
+<div class="md-content">
+  {{ .Content }}
+</div>
+{{- end }}
+
+{{- if .Sections }}
+{{/* Top-level /collections/ page: show each collection as a card */}}
+{{- range .Sections }}
+<article class="post-entry">
+  <header class="entry-header">
+    <h2 class="entry-hint-parent">{{ .Title }}</h2>
+  </header>
+  <div class="entry-content">
+    <p>{{ .Description }}</p>
+  </div>
+  <footer class="entry-footer">
+    <span>{{ len .RegularPages }} articles</span>
+  </footer>
+  <a class="entry-link" aria-label="post link to {{ .Title | plainify }}" href="{{ .Permalink }}"></a>
+</article>
+{{- end }}
+
+{{- else }}
+{{/* Sub-section page (e.g. /collections/go-concurrency/): show chapters as a book TOC */}}
+<div class="collection-toc">
+  {{- range .RegularPages.ByWeight }}
+  <div class="collection-chapter">
+    <a href="{{ .Permalink }}" class="collection-chapter-link">
+      <span class="collection-chapter-number">{{ .Weight }}.</span>
+      <div class="collection-chapter-info">
+        <h3 class="collection-chapter-title">{{ .Title }}</h3>
+        {{- if .Summary }}
+        <p class="collection-chapter-summary">{{ .Summary | plainify | truncate 120 }}</p>
+        {{- end }}
+        <div class="collection-chapter-meta">
+          {{- partial "post_meta.html" . -}}
+        </div>
+      </div>
+    </a>
+  </div>
+  {{- end }}
+</div>
+{{- end }}
+
+{{- end }}{{- /* end main */ -}}
