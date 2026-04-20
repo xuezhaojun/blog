@@ -4,7 +4,7 @@ layout: "single"
 url: "/about-zh/"
 summary: "个人简介"
 ShowToc: false
-draft: true
+draft: false
 hideMeta: true
 ---
 

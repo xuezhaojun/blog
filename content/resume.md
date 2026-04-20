@@ -4,7 +4,7 @@ layout: "single"
 url: "/resume/"
 summary: "Red Hat 项目经历详述"
 ShowToc: false
-draft: true
+draft: false
 hideMeta: true
 ---
 
