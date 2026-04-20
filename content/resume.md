@@ -29,8 +29,6 @@ hideMeta: true
 
 ### AI + K8s 平台能力
 
-> 以下两个项目均为自主发起，独立构思、设计和完成，非团队自上而下的任务。
-
 **[KubeOpenCode](https://github.com/kubeopencode/kubeopencode)** — K8s 原生 AI Agent 平台，独立完成全部工作
 
 - **K8s 原生设计**：Agent、Task、CronTask 全部作为 CRD，通过 K8s API 管理 AI 工作负载的生命周期和调度
