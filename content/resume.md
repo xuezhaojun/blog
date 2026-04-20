@@ -45,7 +45,9 @@ hideMeta: true
 
 ### 主动性
 
-**效能提升**：主动考取 PSM 认证推动团队敏捷开发落地；创建 [konflux-build-catalog](https://github.com/stolostron/konflux-build-catalog) 集中化方案，消除 60-70 个 repo 每周数百个重复 Tekton 更新 PR，方案被整个 org 采用
+**敏捷落地**：主动考取 PSM 认证，推动团队敏捷开发流程落地
+
+**效能提升**：创建 [konflux-build-catalog](https://github.com/stolostron/konflux-build-catalog) 集中化方案，消除 60-70 个 repo 每周数百个重复 Tekton 更新 PR，方案被整个 org 采用
 
 **成本优化**：主动 review 全组 AWS 测试集群配置（存储类型 io1→gp3 降幅 96%、实例类型 m5→t3、按测试场景分层为 HA/Lite cluster — HA 用于高可用场景、Lite 用于常规测试），月费 $5,000 → $2,000，年省 $36K
 
