@@ -11,8 +11,6 @@ hideMeta: true
 
 ### 集群管理
 
-**OCM Core Maintainer** — [1400+ merged PRs, 270+ PR reviews](https://github.com/xuezhaojun)，覆盖 Registration、Workload、Placement、Add-on Framework、SDK 等核心模块。全栈 Go 开发，5 年 CRD + Controller / Operator 模式实践。
-
 **[Cluster-Proxy](https://github.com/open-cluster-management-io/cluster-proxy) 核心负责人** — [106 merged PRs](https://github.com/open-cluster-management-io/cluster-proxy/pulls?q=is%3Apr+is%3Amerged+author%3Axuezhaojun)
 
 - 在 OCM 的 Hub-Spoke 架构下，通过反向隧道使用户可以从 Hub 侧直接访问 Agent 侧的目标 Service（包括 KubeAPI Server），解决 Pull Mode 下 Hub 无法主动连接被管集群的核心问题
@@ -22,9 +20,9 @@ hideMeta: true
 
 - 从开源 OCM 到企业级 ACM 的关键衔接组件：提供 auto-import 自动接入和跨云多厂商集群集成能力（AWS/Azure/GCP/私有云），使 ACM 具备真实生产环境的可用性
 
-**Registration 模块 [Approver](https://github.com/open-cluster-management-io/ocm/blob/d770e1655234d34fd8df03ab5d297a34b5d42ce2/pkg/registration/OWNERS#L4)**
+**OCM Core Maintainer** — [1400+ merged PRs, 270+ PR reviews](https://github.com/xuezhaojun)，覆盖 Registration、Workload、Placement、Add-on Framework、SDK 等核心模块。全栈 Go 开发，5 年 CRD + Controller / Operator 模式实践。
 
-- 负责集群注册与身份认证（CSR 签发、证书自动轮换、Lease 心跳监控），作为 approver 负责该模块的代码审批和质量把关
+- Registration 模块 [Approver](https://github.com/open-cluster-management-io/ocm/blob/d770e1655234d34fd8df03ab5d297a34b5d42ce2/pkg/registration/OWNERS#L4)：负责集群注册与身份认证（CSR 签发、证书自动轮换、Lease 心跳监控），负责该模块的代码审批和质量把关
 - Switch Hub：实现集群在 Hub 间的在线迁移，支撑 Global Hub（Hub of Hub）横向扩展，突破单 Hub 集群数量上限
 
 ---
@@ -40,7 +38,7 @@ hideMeta: true
 **[Repo-as-Agent](https://xuezhaojun.github.io/posts/repo-as-agent/) 方法论** — Git repo = Agent 本体（身份、技能、知识、工作流全部版本控制），28 个可复用 skill，覆盖 20+ 仓库
 
 **生产使用案例**：
-- Tekton image 破坏性变更自动处理：与 [konflux-build-catalog](https://github.com/stolostron/konflux-build-catalog) 集成（[workflow L247](https://github.com/stolostron/konflux-build-catalog/blob/8eb3352732e44d44ea9ec2923d50bd2731871a47/.github/workflows/update-tekton-task-bundles.yaml#L247)），检测 → 分析 → 修改 → PR → 合并全自动化
+- Tekton image 变更自动处理：与 [konflux-build-catalog](https://github.com/stolostron/konflux-build-catalog) 集成（[workflow L247](https://github.com/stolostron/konflux-build-catalog/blob/8eb3352732e44d44ea9ec2923d50bd2731871a47/.github/workflows/update-tekton-task-bundles.yaml#L247)），检测 → 分析 → 修改 → PR → 合并全自动化
 - CronTask 定时任务：每日 Scrum 情况自动分析、每日新 bug 自动分析、每周 bot PR 自动处理
 
 ---
@@ -51,7 +49,7 @@ hideMeta: true
 
 **成本优化**：主动 review 全组 AWS 测试集群配置（存储类型 io1→gp3 降幅 96%、实例类型 m5→t3、按测试场景分层为 HA/Lite cluster — HA 用于高可用场景、Lite 用于常规测试），月费 $5,000 → $2,000，年省 $36K
 
-**可维护性**：主导 Registration/Work/Placement 三仓库合并为 [Mono Repo](https://github.com/open-cluster-management-io/ocm/issues/128#issuecomment-1552536628)，统一依赖管理和 CI/CD 流程，减少跨仓库维护开销
+**可维护性**：主导 Registration/Work/Placement 等多仓库合并为 [Mono Repo](https://github.com/open-cluster-management-io/ocm/issues/128#issuecomment-1552536628)，统一依赖管理和 CI/CD 流程，减少跨仓库维护开销
 
 **文档与社区**：主导 OCM 社区文档网站重构（[PR #429](https://github.com/open-cluster-management-io/open-cluster-management-io.github.io/pull/429)，+1,856 / -11,626 行）— 迁移 Google Docsy 主题（K8s/Istio/gRPC 等 CNCF 项目标准选择），砍掉无实际维护的中文文档（48/55 文件仅标题中文），文件数减少 46%，降低社区参与门槛
 
