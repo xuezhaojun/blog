@@ -1,12 +1,10 @@
 ---
-title: "About"
+title: "Zhao Xue"
 layout: "single"
 url: "/about/"
 summary: "About me"
 ShowToc: false
 ---
-
-## Zhao Xue
 
 ### Contact
 
