@@ -1,7 +1,7 @@
 ---
 title: "从一次 K8s Controller 竞态崩溃聊起：彻底搞懂 Go sync 包核心原语"
 date: 2026-04-18
-draft: true
+draft: false
 tags: ["Go", "并发", "sync", "Mutex", "Kubernetes", "性能调优", "中文"]
 summary: "一个 K8s operator 在高负载下频繁 fatal crash：concurrent map read and map write。问题不在逻辑，在于共享状态的保护方式。从这个事故出发，拆解 Mutex 的正常/饥饿模式、RWMutex 的读写协调、WaitGroup 的计数器陷阱、Once 的 double-checking，以及 sync.Map 的双 map 架构。"
 weight: 4
@@ -13,6 +13,7 @@ ShowReadingTime: true
 *这是「Go 并发原理实战」系列的第四篇。*
 - *[第一篇：从一次 K8s Controller OOM 聊起——彻底搞懂 Go GMP 调度模型](/collections/go-concurrency/go-goroutine-gmp/)*
 - *[第二篇：从一次 K8s Webhook 超时聊起——彻底搞懂 Go Channel 底层原理](/collections/go-concurrency/go-channel/)*
+- *[第三篇：从一次 K8s 级联超时聊起：彻底搞懂 Go Context 的传播机制](/collections/go-concurrency/go-context/)*
 
 ---
 
@@ -65,6 +66,27 @@ func (r *Reconciler) reconcile(ctx context.Context, name string) error {
 问题一目了然：**informer 的回调在写 map，reconciler 的多个 worker 在并发读 map**。Go 的 map 不是线程安全的——并发读写会触发 runtime 的竞态检测，直接 `fatal error`，连 `recover` 的机会都不给你。
 
 这不是 panic，是 runtime 层面的 `throw`——它认为程序的内存状态已经不可信了，继续跑下去可能造成数据损坏，所以直接终止。
+
+### Go 的数据类型，哪些是线程安全的？
+
+map 不是线程安全的，那 Go 的其他基础类型呢？**简单来说，Go 的内置类型几乎都不是线程安全的。** 这是 Go 的设计哲学——不在语言层面为所有类型加锁（代价太大），而是把并发控制交给开发者。
+
+| 类型 | 线程安全？ | 说明 |
+|------|-----------|------|
+| `int`, `float64`, `bool` 等基础类型 | ❌ | 并发读写是数据竞争（data race）。虽然在某些 CPU 架构上"看起来没问题"，但 Go 内存模型不保证原子性，race detector 会报错 |
+| `string` | ❌ | string 底层是 `(ptr, len)` 两个字段，并发读写可能读到不一致的指针和长度，导致访问非法内存 |
+| `slice` | ❌ | 底层是 `(ptr, len, cap)` 三个字段，并发 append 可能丢数据、panic、或读到脏数据 |
+| `map` | ❌ | 并发读写直接 fatal error（runtime 主动检测并终止），不是 panic，无法 recover |
+| `struct` | ❌ | 多字段的复合类型，并发读写可能读到"半新半旧"的状态 |
+| `interface` | ❌ | 底层是 `(type, value)` 两个指针，并发赋值可能读到类型和值不匹配的组合 |
+| `channel` | ✅ | **唯一线程安全的内置类型。** channel 内部自带锁，多个 goroutine 可以安全地并发收发 |
+
+需要并发安全时，Go 提供了以下工具：
+
+- **`sync.Mutex` / `sync.RWMutex`** —— 保护任意共享数据（本文重点）
+- **`sync/atomic`** —— 对基础类型做原子操作，无锁，性能最高
+- **`sync.Map`** —— 官方提供的并发安全 map，适用于读多写少的场景
+- **`channel`** —— 通过通信共享数据，而不是通过共享数据来通信
 
 ### 为什么以前没事？
 
@@ -130,7 +152,22 @@ type Mutex struct {
 
 ### 加锁流程
 
-当你调用 `mu.Lock()` 时，Go runtime 按优先级走三步：
+当你调用 `mu.Lock()` 时，Go runtime 按优先级走三步。在看代码之前，先介绍一个贯穿本文的底层操作——**CAS**。
+
+**什么是 CAS？**
+
+CAS 是 **Compare-And-Swap**（比较并交换）的缩写，是 CPU 提供的一条原子指令。它的逻辑是：
+
+```
+CAS(addr, old, new)：
+  读取 addr 的当前值
+  如果 == old → 替换成 new，返回 true（成功）
+  如果 != old → 不做任何操作，返回 false（失败，说明被别人改过了）
+```
+
+**整个过程是原子的**——CPU 硬件保证这三步不会被其他核心打断。这就让多个 goroutine 可以在不加锁的情况下安全地竞争修改同一个变量：谁 CAS 成功谁就"抢到了"，失败的再重试或走其他路径。
+
+Go 的 `sync/atomic` 包提供了 CAS 的封装，比如 `atomic.CompareAndSwapInt32`。下面马上就会看到 Mutex 是怎么用它的。
 
 **第一步：Fast path — CAS 尝试直接获取**
 
@@ -618,6 +655,47 @@ func (c *PolicyCache) getClient() *ExternalClient {
 | WaitGroup | 等待一组 goroutine 全部完成 | 原子计数器 + 信号量；Add 必须在 Wait 之前 |
 | Once | 保证函数只执行一次 | 原子读 fast path + 加锁 double-checking；保证 f() 完成后才放行 |
 | sync.Map | 并发安全的 map | 双 map（read 无锁 + dirty 加锁）；适合读多写少、key 稳定 |
+
+### atomic 和 Mutex 怎么选？
+
+上面的表格全是 `sync` 包里的锁和协调原语，但前面提到还有一个 `sync/atomic`。它们解决的问题不同：
+
+**`sync/atomic`** 是 CPU 级别的原子指令（CAS、Load、Store、Add），不需要锁，不会阻塞 goroutine，**只能操作单个变量**。
+
+```go
+var counter int64
+
+// 多个 goroutine 安全地 +1，无需加锁
+atomic.AddInt64(&counter, 1)
+
+// 安全地读取
+val := atomic.LoadInt64(&counter)
+```
+
+**Mutex** 保护的是一个**临界区**——一段代码里可以操作多个变量、做复杂逻辑。
+
+```go
+mu.Lock()
+// 临界区：可以同时操作多个变量，保证它们的一致性
+balance -= amount
+transactions = append(transactions, tx)
+lastUpdated = time.Now()
+mu.Unlock()
+```
+
+选择标准很简单：
+
+| 场景 | 选择 | 原因 |
+|------|------|------|
+| 单个计数器的加减 | `atomic.AddInt64` | 无锁，性能最高 |
+| 单个标志位的读写 | `atomic.LoadInt32` / `StoreInt32` | 无锁，比如"是否已关闭" |
+| 单个指针/值的替换 | `atomic.Value` | 无锁读，适合配置热更新 |
+| 同时修改多个字段 | `Mutex` / `RWMutex` | atomic 只能保证单个变量的原子性，多个变量之间的一致性必须靠锁 |
+| 需要条件判断再修改 | `Mutex` | 比如 "if balance >= amount then balance -= amount"，check-then-act 必须在锁内完成 |
+
+一句话总结：**能用 atomic 解决的就用 atomic（快），需要保护多个变量或复杂逻辑就用 Mutex（安全）。**
+
+实际上 sync 包自身就大量使用了 atomic——本文分析过的 `Once` 用 `atomic.Load` 做 fast path，`Mutex` 用 `CAS` 尝试快速获取锁，`RWMutex` 用 `atomic.Add` 管理 readerCount。**atomic 是底层积木，Mutex 是上层工具**，两者是互补关系。
 
 前三篇文章讲了 goroutine 怎么调度（GMP）、goroutine 之间怎么通信（Channel）、怎么传递取消信号和超时（Context）。这一篇讲的是另一个维度的问题：**多个 goroutine 访问共享状态时，怎么保证正确性。**
 
