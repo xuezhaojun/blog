@@ -1,7 +1,7 @@
 ---
 title: "从一次 K8s 级联超时聊起：彻底搞懂 Go Context 的传播机制"
 date: 2026-04-18
-draft: true
+draft: false
 tags: ["Go", "并发", "Context", "Kubernetes", "性能调优", "中文"]
 summary: "一个 K8s admission webhook 上线后内存持续增长，pprof 显示大量 timer 泄漏。根因是 context.WithTimeout 的 cancel 函数没有被调用。从这个事故出发，拆解 context 的树状传播机制、四种派生函数、最佳实践与常见陷阱。"
 weight: 3
@@ -399,7 +399,80 @@ var traceIDKey = contextKey{}
 ctx = context.WithValue(ctx, traceIDKey, "abc")
 ```
 
-用自定义类型做 key，即使两个包都叫 "traceID"，类型不同也不会冲突。
+**为什么字符串做 key 会出问题？**
+
+`context.WithValue` 底层用 `==` 比较 key，比较的是 **（类型, 值）** 这个组合。字符串的类型都是 `string`，所以只要值相同就会匹配。
+
+假设有两个完全无关的包，各自往 context 里存了 `"traceID"`：
+
+```go
+// 包 A：logging 包
+ctx = context.WithValue(ctx, "traceID", "abc-from-logging")
+
+// 包 B：monitoring 包，后执行，也用了同样的 key
+ctx = context.WithValue(ctx, "traceID", "xyz-from-monitoring")
+```
+
+`context.WithValue` 不会"覆盖"旧值，而是在链表头部再包一层。但 `context.Value` 查找时从最新的节点往回找，**找到第一个匹配就返回**。所以：
+
+```go
+ctx.Value("traceID") // → "xyz-from-monitoring"
+// 包 A 存进去的 "abc-from-logging" 被"遮蔽"了，永远拿不到
+```
+
+包 A 以为自己能读到 `"abc-from-logging"`，实际拿到的却是包 B 写的值——这就是**跨包 key 冲突**。
+
+**自定义类型如何解决？**
+
+Go 的 `==` 比较会同时检查 **类型** 和 **值**。即使两个包都定义了空 struct，它们是不同的类型：
+
+```go
+// 包 A：logging/context.go
+type contextKey struct{}                  // 完整类型名：logging.contextKey
+var traceIDKey = contextKey{}
+
+// 包 B：monitoring/context.go
+type contextKey struct{}                  // 完整类型名：monitoring.contextKey
+var traceIDKey = contextKey{}
+```
+
+虽然两个 key 看起来一模一样，但 `logging.contextKey` 和 `monitoring.contextKey` 是两个不同的类型，`==` 比较结果为 false，互不干扰。再加上 `type contextKey struct{}` 首字母小写未导出，包外根本无法引用这个类型，彻底实现了**包级别的 key 隔离**。
+
+**怎么取值？——提供导出的访问函数**
+
+空 struct 做 key，外部确实拿不到这个 key，所以标准做法是：**每个包提供一对导出的存取函数**。
+
+```go
+package logging
+
+// 未导出的 key 类型，外部不可见
+type contextKey struct{}
+var traceIDKey = contextKey{}
+
+// 导出的存取函数 —— 这是外部唯一的访问方式
+func WithTraceID(ctx context.Context, id string) context.Context {
+    return context.WithValue(ctx, traceIDKey, id)
+}
+
+func TraceIDFrom(ctx context.Context) (string, bool) {
+    id, ok := ctx.Value(traceIDKey).(string)
+    return id, ok
+}
+```
+
+使用方式：
+
+```go
+// 存
+ctx = logging.WithTraceID(ctx, "abc")
+
+// 取
+if id, ok := logging.TraceIDFrom(ctx); ok {
+    fmt.Println(id) // "abc"
+}
+```
+
+这样 key 被封装在包内部，外部只通过函数访问，既安全又清晰。这也是 Go 标准库和社区的通用模式。
 
 ---
 
