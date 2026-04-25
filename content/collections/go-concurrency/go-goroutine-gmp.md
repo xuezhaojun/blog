@@ -325,6 +325,16 @@ func (r *Reconciler) reconcile(ctx context.Context, obj *MyResource) error {
 
 ---
 
+## 关键结论
+
+- 每写一个 `go func()`，立刻回答"它什么时候退出、谁通知它退出"——答不上来就不要写
+- 用 channel 做异步通信时，站在**对面**的角度想一遍：如果我这边已经走了，对面还能正常退出吗？
+- 怀疑 goroutine 泄漏时，第一件事是 `pprof goroutine dump` 看总数和阻塞状态，而不是看 CPU 或日志
+- 超时场景下用 `select + ctx.Done()` 提前返回时，务必给 channel 加缓冲或用 `select + default`，否则发送端会永久阻塞
+- 排查延迟毛刺时，先查 goroutine 数量——即使全部阻塞，GC 仍要扫描每个栈，goroutine 多就意味着 STW 长
+
+---
+
 ## 总结：GMP 知识的实战价值
 
 GMP 不是面试八股文，它是你排查 Go 并发问题时的"X 光片"。

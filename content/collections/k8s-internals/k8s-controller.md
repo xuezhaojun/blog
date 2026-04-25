@@ -486,6 +486,15 @@ if !reflect.DeepEqual(currentStatus, newStatus) {
 
 3. 使用 `Status().Update()` 而不是整体 `Update()`——前者只更新 `/status` 子资源，不会递增 `metadata.generation`
 
+## 关键结论
+
+- Controller 的核心价值是把声明式的"期望状态"变成现实。它不是在响应事件，而是在不断回答"当前和期望是否一致"这个问题。
+- Reconcile 必须是幂等的——它可能因为任何原因被重复调用，你的代码不能假设"上一次成功了"或"这次是因为某个事件触发的"。
+- 错误重试必须返回 error 让 WorkQueue 的指数退避生效，绝不要用固定的 `RequeueAfter` 处理错误。一行代码的差别就是"正常运行"和"打爆 API Server"的区别。
+- Informer 的设计哲学是"读操作走本地缓存，写操作走 API Server"。Controller 的大量读操作不会给 API Server 施加压力，这就是为什么几十个 Controller 同时运行也没问题。
+- Status 更新会触发 Watch 事件，如果不用 Predicate 过滤或 DeepEqual 对比，就会陷入 Reconcile 死循环。
+- 同一个对象的 Reconcile 是串行的（由 WorkQueue 保证），不同对象可以并行。这意味着你不需要在 Reconcile 里加锁，但要合理设置并发度。
+
 ## 总结
 
 回到开头那个 P1 故障。一行 `RequeueAfter: 5s` 导致 200+ 集群管控面雪崩，表面看是"写错了一个参数"，本质上是对 Controller 内部限速机制的认知不足。

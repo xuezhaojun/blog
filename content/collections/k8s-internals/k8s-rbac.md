@@ -736,6 +736,14 @@ roleRef:
 
 ---
 
+## 关键结论
+
+- `pods` 的 `verbs: ["*"]` 不覆盖 `pods/exec`、`pods/log` 等子资源——子资源在 RBAC 中是独立的资源条目，必须单独授权。
+- 排查权限问题的第一步永远是 `kubectl auth can-i`，而不是翻 Role 定义。它能直接告诉你某个主体对某个资源有没有某个操作权限。
+- 1.24+ 之后 SA token 默认 1 小时过期，如果你的代码在启动时一次性读取 token 并缓存，迟早会遇到间歇性 401。用 `rest.InClusterConfig()` 或每次请求前重新读文件。
+- 需要跨多个 namespace 用同一套权限时，定义一个 ClusterRole 然后在每个 namespace 用 RoleBinding 绑定——比在每个 namespace 重复创建 Role 干净得多。
+- 永远不要给 default ServiceAccount 加权限。为每个应用创建专用 SA，并默认关闭 `automountServiceAccountToken`，只在需要时显式开启。
+
 ## 总结
 
 回到开头的 `pods/exec forbidden`——现在你应该清楚了：

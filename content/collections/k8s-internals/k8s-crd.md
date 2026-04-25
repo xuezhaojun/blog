@@ -861,6 +861,14 @@ kubectl get clusterrole <role-name> -o yaml
 
 ---
 
+## 关键结论
+
+- CRD 只定义数据模型（"是什么"），Controller 实现业务逻辑（"做什么"）。没有 Controller 的 CRD 就是一堆躺在 etcd 里的 JSON，不会产生任何实际效果。
+- Finalizer 是一个删除保护锁：只要 `metadata.finalizers` 非空，API Server 就拒绝真正删除对象。`--force` 对 Finalizer 完全无效，因为 Finalizer 是 API Server 层面的机制，不是 kubelet 层面的。
+- CR 卡在 Terminating 时，第一反应不应该是 `--force`，而是去检查 Controller 是否在运行、清理逻辑是否报错。
+- Webhook 挂了可能导致死锁：Webhook Pod 挂了 → K8s 想重建它 → 创建 Pod 要经过 Webhook → 但 Webhook 就是要被创建的 → 死锁。所以 Webhook 必须用 `namespaceSelector` 排除系统命名空间。
+- CRD 版本迁移的正确顺序是：先部署 Conversion Webhook，再修改 storage 版本，最后迁移数据。顺序反了会导致旧 CR 读取失败。
+
 ## 总结
 
 CRD 是 Kubernetes 可扩展性的基石。理解 CRD + Controller + Finalizer + Webhook 的完整链路，才能在生产环境中自信地操作自定义资源。

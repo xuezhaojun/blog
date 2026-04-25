@@ -466,6 +466,17 @@ for {
 
 ---
 
+## 关键结论
+
+- 写 fan-out 代码时，缓冲区大小至少等于 goroutine 数量——否则调用方提前 return 就会泄漏 goroutine。
+- 每个 channel 操作都要问自己："如果对面永远不来怎么办？"——没有 `select` + `context` 超时兜底的阻塞操作迟早出事。
+- 需要停掉多个 goroutine 时用 `close` 广播，不要循环发值——一次 close 唤醒所有等待者。
+- 多个发送方共享一个 channel 时，不要让任何一方 close，改用 `context` 取消来协调退出。
+- Channel 传大结构体会整个拷贝，传指针只拷贝 8 字节——channel 是用来传信号和小数据的，不是队列。
+- 想"关闭" select 的某个 case 而不删代码时，把对应 channel 设为 nil——nil channel 永远阻塞，select 会跳过它。
+
+---
+
 ## 总结
 
 | 概念 | 一句话 |

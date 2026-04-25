@@ -646,6 +646,17 @@ func (c *PolicyCache) getClient() *ExternalClient {
 
 ---
 
+## 关键结论
+
+- 默认假设所有共享状态都不安全——看到 struct 里有 map、slice 或多字段被并发访问，第一反应是加锁，而不是"先跑跑看"。
+- 拿不准用 Mutex 还是 RWMutex 时，先用 Mutex；只在 benchmark 证明读锁能带来明显收益后才换 RWMutex。
+- `wg.Add(1)` 永远写在 `go func()` 的上一行，绝不放进 goroutine 内部——否则 `Wait` 可能在 `Add` 之前返回。
+- 不要用 CAS 自己造 Once——CAS 成功的 goroutine 还在执行初始化时，其他 goroutine 已经拿到了半成品。
+- 包含 Mutex 的 struct 必须传指针；值传递会复制锁状态，`go vet` 能查但运行时不会报错，bug 极隐蔽。
+- 竞态 bug 在低并发时几乎不出现，CI 里加 `go test -race` 是唯一可靠的防线。
+
+---
+
 ## 总结
 
 | 原语 | 一句话 | 底层机制 |

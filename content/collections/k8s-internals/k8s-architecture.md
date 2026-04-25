@@ -910,6 +910,14 @@ iptables -t nat -L KUBE-SERVICES | grep <clusterIP>
 
 ---
 
+## 关键结论
+
+- 排查故障时，先问"哪些 Pod 受影响"：只有新 Pod 有问题 → 查 Scheduler；所有 kubectl 超时 → 查 API Server 和 Webhook 链；某个节点上的 Pod 异常 → 查该节点的 Kubelet。按影响面定位组件，不要盲目重启。
+- `kubectl apply` 返回成功后别急着往下走——它只意味着"etcd 记下来了"。在 CI/CD 流水线中，必须显式等待 Pod Ready（如 `kubectl rollout status`），否则流水线通过了但服务可能根本没起来。
+- 生产环境的 Webhook 必须做三件事：`failurePolicy: Ignore`（后端挂了不阻塞请求）、`timeoutSeconds` 缩短到 5 秒以内、`rules` 限定到具体资源类型。`rules: ["*"]` + `failurePolicy: Fail` 是集群级别的定时炸弹。
+- 集群"突然变慢"但没有明确报错时，第一个该查的是 etcd 磁盘 IO（`iostat -x 1`）。API Server 的每次写操作都要等 etcd fsync，磁盘延迟 10ms 以上整个集群都会感觉迟钝。
+- 遇到 API Server 不可用时不要慌——已经在运行的 Pod 和已配置的网络规则不受影响。优先恢复 API Server，而不是去重启 Worker 节点上的服务。
+
 ## 总结
 
 回到文章开头的故障。一个 MutatingAdmissionWebhook 后端挂了，为什么能搞瘫整个集群？

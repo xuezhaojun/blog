@@ -551,6 +551,14 @@ Controller 被迫 re-LIST ──→ 全量数据加载
 
 ---
 
+## 关键结论
+
+- 生产环境的 etcd 必须用独立的 SSD 磁盘，不和任何其他服务共享 IO。这不是"建议"，是硬性要求——fsync 延迟超过 10ms 就会拖慢整个集群，超过 100ms 就会触发 Leader 选举风暴。
+- 运维 etcd 要同时做好两件事：compaction（自动的，默认 5 分钟）+ defrag（手动的，需要在维护窗口逐节点执行）。只做 compaction 不做 defrag 就是本文开头事故的根因——磁盘文件只增不减，迟早触发 space quota。
+- 监控必须覆盖三个指标：`etcd_disk_wal_fsync_duration_seconds`（磁盘健康）、`etcd_mvcc_db_total_size_in_bytes`（空间用量）、以及它和 `in_use` 的差值（碎片率）。db size 达到 quota 的 80% 时就该告警。
+- Controller 代码中看到 `409 Conflict` 不要当 bug 处理——这是乐观锁在正常工作。正确的做法是重新 GET 最新版本再重试，而不是加重试间隔或打 error 日志告警。
+- CRD status 中不要塞大量数据（如完整的集群状态快照）。大 value 会跨多个 boltdb page，拖慢同页其他 key 的读取。考虑用外部存储放大数据，etcd 只存引用。
+
 ## 总结
 
 回到那次 `database space exceeded` 事故：根因并不复杂——缺少 defrag 导致物理空间无法回收。但理解这个问题的「为什么」，需要串联 etcd 的整套知识体系：

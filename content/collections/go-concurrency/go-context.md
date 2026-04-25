@@ -577,6 +577,16 @@ Context 的取消机制建立在前两篇的基础之上：
 
 ---
 
+## 关键结论
+
+- 写完 `WithCancel`/`WithTimeout`/`WithDeadline` 的下一行立刻写 `defer cancel()`——把它当成左括号必须配右括号的肌肉记忆。
+- 设计超时时从外层往内层递减（如入口 10s → RPC 3s → DB 1s），因为子 context 的 deadline 永远不可能晚于父 context。
+- 想往 context 里塞数据时先问自己：这是"请求级元数据"还是"业务参数"？后者永远走函数签名，别用 `WithValue` 当万能口袋。
+- Context 跟着请求走而不是跟着对象走——存进 struct 等于让所有请求共享一条命，一个取消全挂。
+- 每个出站调用（HTTP、RPC、DB query）都传 context，否则上游取消后下游还在空转浪费资源。
+
+---
+
 ## 总结
 
 | 概念 | 一句话 |

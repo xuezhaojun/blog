@@ -456,6 +456,17 @@ s = slices.Delete(s, i, i+1)  // 保持顺序删除
 
 ---
 
+## 关键结论
+
+- 需要从一个 slice 派生新 slice 再 append 时，先用 `s[:len(s):len(s)]` 截断 cap——这一行能杜绝所有"共享底层数组导致数据互相污染"的 Bug。
+- 函数里 append 后想让调用者看到变化，要么返回新 slice，要么传 `*[]T`——仅传 `[]T` 时调用者的 header 永远不会更新。
+- 需要就地修改 struct 元素时，用 `for i := range s` + `s[i].Field =`，永远不要对 range 变量 `v` 赋值。
+- API 响应里的 slice 字段一律用 `make([]T, 0)` 初始化——防止 JSON 序列化输出 `null` 击穿前端。
+- 知道大致数量就 `make([]T, 0, n)` 预分配——减少扩容次数是 slice 最容易拿到的性能收益。
+- 手动删除指针类型 slice 元素后，把尾部置 `nil`——`slices.Delete` 会自动做这件事，优先用它。
+
+---
+
 ## 总结
 
 | 知识点 | 核心要点 |

@@ -589,6 +589,14 @@ Zone C: 3 pods (全部 NotReady，无法调度新 Pod)
 
 ---
 
+## 关键结论
+
+- Pod Pending 时先看 `kubectl describe node` 的 Allocated resources 而不是 `kubectl top`——调度器只认 requests，不看实际使用量，这两个数字可能差几倍。
+- 设 requests 时把它当成"你向集群预定的资源"，而不是"应用实际用多少"。requests 设为 0 等于告诉调度器"我不需要资源"，后果是超卖和被优先驱逐。
+- 调度器只管新 Pod 放哪，不管已经跑着的 Pod 分布是否合理。发现负载不均时，去找 Descheduler，别指望调度器自己修。
+- PriorityClass 的数字大小直接决定了谁能抢占谁——上线前必须和团队对齐优先级体系，否则批处理任务可能把线上服务挤掉。
+- `TopologySpreadConstraints` 配了硬约束（`DoNotSchedule`）又遇到 zone 故障时，很容易死锁。除非你有充分理由，否则优先用软约束（`ScheduleAnyway`）。
+
 ## 总结
 
 回到开头的故事：Pod Pending 不是因为"没资源"，而是因为"没有可调度资源"。理解这个区别，就理解了调度器的核心设计哲学：

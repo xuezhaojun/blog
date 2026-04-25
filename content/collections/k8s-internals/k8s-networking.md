@@ -569,6 +569,14 @@ kubectl delete networkpolicy allow-a-to-b  # 测试环境操作
 
 ---
 
+## 关键结论
+
+- ClusterIP 是一个不存在于任何网卡上的虚拟 IP，它只活在 iptables/IPVS 规则里。理解这一点就不会再困惑"为什么 ping 不通 ClusterIP"。
+- Service 到 Pod 的映射靠的是 label selector，不是名字或 namespace 约定。大多数"Service 不通"的问题根因都是 label 不匹配。
+- NetworkPolicy 是白名单语义：一旦有策略选中某个 Pod，未显式声明的流量就全部被拒，包括 DNS。忘记放通 DNS（UDP 53）是最常见的 NetworkPolicy 踩坑点。
+- K8s 的网络模型要求所有 Pod 都有一个全局唯一、直接可达的 IP——CNI 插件负责实现这个承诺，但不是所有 CNI 都支持 NetworkPolicy。
+- `ndots:5` 让 Pod 内的外部域名解析多走 3 次无效查询。对于频繁访问外部 API 的服务，降低 ndots 或使用 FQDN（末尾加点）能显著减少 DNS 延迟。
+
 ## 小结
 
 从一个 "Service Endpoints 为空" 的小事故出发，我们串联了 K8s 的整个网络模型：

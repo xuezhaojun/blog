@@ -612,6 +612,14 @@ kubectl top node
 
 ---
 
+## 关键结论
+
+- 滚动更新出现 502 几乎都是同一个原因：Pod 关端口比 iptables 规则摘除更快。加一个 `preStop: sleep 5` 就能解决，这不是 hack 而是官方最佳实践。
+- livenessProbe 只检查应用自身是否死锁，绝不要检查外部依赖——数据库挂了你重启自己没有任何意义，那是 readinessProbe 的职责。
+- 启动慢的应用（Java、大数据加载）必须配 startupProbe，否则 livenessProbe 会在应用还没起来时就把它杀掉，形成无限重启。
+- `terminationGracePeriodSeconds` 是 preStop + SIGTERM 等待的总时间，不是分别计算的。preStop sleep 太长会挤占应用处理存量请求的时间。
+- Docker 镜像在 containerd 上完全兼容——1.24 移除的是 dockershim 这个中间层，不是 Docker 镜像格式。构建流程不需要任何改变。
+
 ## 总结
 
 回到开头的 502 问题，本质上是对 Pod 终止流程中的**并行竞态**不了解导致的。把完整的 Pod 生命周期梳理一遍：
