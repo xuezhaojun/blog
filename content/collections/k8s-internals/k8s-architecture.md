@@ -1,0 +1,927 @@
+---
+title: "从一次 Webhook 拖垮集群聊起：彻底搞懂 K8s 架构设计"
+date: 2026-04-24
+draft: true
+tags: ["Kubernetes", "架构", "API Server", "etcd", "中文"]
+summary: "一个 MutatingAdmissionWebhook 后端挂掉导致整个集群'假死'，排查过程串联起 K8s 所有核心组件的职责与协作：API Server 的请求处理链、etcd 的唯一真相源角色、Controller Manager 的调谐循环、Scheduler 的选房策略、Kubelet 的工地执行、kube-proxy 的网络粘合。"
+weight: 1
+ShowToc: true
+TocOpen: true
+ShowReadingTime: true
+---
+
+## 引子：一个 Webhook 搞瘫整个集群
+
+周五下午五点半，告警群炸了。
+
+```
+CRITICAL: kubectl get pods -n production — timeout after 30s
+CRITICAL: New pod creation failed — context deadline exceeded
+WARNING: HPA unable to scale deployment/order-service
+```
+
+SRE 团队迅速介入。现象很诡异：
+
+- `kubectl` 所有命令超时，包括最简单的 `kubectl get nodes`
+- **新 Pod 无法创建**，Deployment 的 rollout 完全卡住
+- 但**已经在运行的 Pod 一切正常**，业务流量没有受到影响
+- 节点 CPU、内存、磁盘全部正常
+
+已运行的 Pod 正常，说明数据面（data plane）没问题。问题出在控制面（control plane）。
+
+第一反应是看 API Server。`kubectl` 都超时了，API Server 肯定有问题。但 API Server 进程活着、端口在监听、health check 有时候还能返回 200。
+
+转去看 API Server 的日志：
+
+```
+W0424 17:32:15.123456 1 dispatcher.go:142] Failed calling webhook "mutate.security-scanner.io":
+  context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+W0424 17:32:15.123457 1 dispatcher.go:142] Failed calling webhook "mutate.security-scanner.io":
+  context deadline exceeded
+```
+
+日志里全是这条 webhook 调用超时的记录。
+
+```bash
+kubectl get mutatingwebhookconfigurations
+```
+
+找到了元凶 — 安全团队上周部署了一个 `security-scanner` 的 MutatingAdmissionWebhook，它的后端 Pod 刚好挂了。关键配置：
+
+```yaml
+failurePolicy: Fail        # 调不通就拒绝请求
+timeoutSeconds: 30          # 每次超时等 30 秒
+matchPolicy: Equivalent
+rules:
+  - apiGroups: ["*"]        # 匹配所有 API Group
+    apiVersions: ["*"]      # 匹配所有版本
+    resources: ["*"]        # 匹配所有资源
+    operations: ["CREATE", "UPDATE"]
+```
+
+这个 webhook 配了 `rules: ["*"]`，意思是**集群里所有资源的所有写操作**都要经过它。后端一挂，每个写请求都要等 30 秒超时，API Server 的 goroutine 被大量阻塞，请求队列堆满，连读请求都受到了影响。
+
+修复只需要一行命令：
+
+```bash
+kubectl delete mutatingwebhookconfiguration security-scanner
+```
+
+集群瞬间恢复。
+
+但这次故障让我重新思考一个问题：**为什么一个小小的 webhook 就能搞瘫整个集群？** 要回答这个问题，必须深入理解 Kubernetes 的架构设计。
+
+这篇文章将从这个真实故障出发，系统梳理 K8s 每个核心组件的职责、协作方式和设计哲学。看完之后，你遇到类似问题时，不用猜，直接就知道去查什么。
+
+---
+
+## 整体架构：声明式 + 最终一致性
+
+Kubernetes 的核心哲学可以用一句话概括：
+
+> **你告诉系统你要什么（声明式），系统自己想办法达到那个状态（调谐循环），并且保证最终会达到（最终一致性）。**
+
+这和传统的命令式系统（"先创建容器、再配置网络、再挂载存储"）有本质区别。你只需要写一份 YAML 描述期望状态，剩下的事情交给 K8s 各个组件协作完成。
+
+一个关键推论：**`kubectl apply` 返回成功，只意味着"etcd 里记下来了"**。至于 Pod 是否真的跑起来了、Service 是否真的通了 — 那是"最终"会发生的事，不是"立刻"发生的事。
+
+### 架构全景图
+
+```mermaid
+graph TB
+    subgraph CP["Control Plane（控制面）"]
+        AS["API Server<br/>集群唯一入口"] <--> etcd["etcd<br/>唯一真相源"]
+        CM["Controller Manager<br/>自动巡检员"] --> AS
+        SCH["Scheduler<br/>房产中介"] --> AS
+        CCM["Cloud Controller Manager<br/>（可选，云厂商适配）"] --> AS
+    end
+    subgraph Node["Worker Node（工作节点）"]
+        KL["Kubelet<br/>工地主管"] --> AS
+        KL --- CR["Container Runtime<br/>（CRI）"]
+        KL --- KP["kube-proxy<br/>快递转发告示"]
+    end
+```
+
+几个核心设计原则：
+
+1. **API Server 是唯一的通信总线** — 所有组件只和 API Server 通信，组件之间不直接对话
+2. **etcd 是唯一的存储** — 只有 API Server 直接读写 etcd，其他组件通过 API Server 间接访问
+3. **控制面组件都是无状态的** — 它们的状态全在 etcd 里，挂了重启就行
+4. **Watch 机制驱动一切** — 组件不是轮询，而是 watch API Server 的变化事件，实时响应
+
+理解了这些原则，回头看 webhook 故障就很清楚了：API Server 是唯一入口，它一旦阻塞，所有组件（Scheduler、Controller Manager、Kubelet）全都"失联"，但已经在运行的 Pod 不受影响，因为它们不需要和控制面通信就能继续工作。
+
+---
+
+## API Server：集群的唯一入口和总线
+
+### 要解决的问题
+
+Kubernetes 有几十个组件（Controller Manager、Scheduler、Kubelet、各种 Operator），还有外部用户通过 kubectl 操作集群。如果让这些组件自由互相通信，系统会变成一团乱麻，安全性和一致性都无法保证。
+
+### 解决方式
+
+API Server 充当**唯一的入口和总线**。所有对集群状态的读写都必须经过它，它提供统一的 RESTful API、认证鉴权、准入控制和 Watch 机制。
+
+### 请求处理链
+
+每个到达 API Server 的请求都要经过一条完整的处理链。这条链就是理解开头 webhook 故障的关键：
+
+```mermaid
+flowchart LR
+    A["客户端请求<br/>kubectl / SDK"] --> B["认证<br/>Authentication"]
+    B --> C["鉴权<br/>Authorization"]
+    C --> D["变更准入控制<br/>Mutating Admission"]
+    D --> E["对象 Schema 校验<br/>Validation"]
+    E --> F["验证准入控制<br/>Validating Admission"]
+    F --> G["持久化到 etcd"]
+
+    style D fill:#ff6b6b,color:#fff
+```
+
+**各阶段详解：**
+
+**1. 认证（Authentication）**
+
+确认"你是谁"。支持多种认证方式：
+
+- X.509 客户端证书（kubelet 常用）
+- Bearer Token（ServiceAccount 常用）
+- OpenID Connect（企业 SSO 常用）
+- Webhook Token 认证（自定义认证服务器）
+
+认证是按顺序尝试的，任何一种方式认证通过即可。
+
+**2. 鉴权（Authorization）**
+
+确认"你能不能做这件事"。主要使用 RBAC（Role-Based Access Control）：
+
+```yaml
+# 这个 ClusterRole 允许读取所有 namespace 的 Pod
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+```
+
+**3. 准入控制（Admission Control）**
+
+这就是 webhook 故障发生的地方。准入控制分两种：
+
+- **Mutating Admission**：可以修改请求对象（比如自动注入 sidecar、添加 label）
+- **Validating Admission**：只能拒绝或放行请求，不能修改
+
+内置的准入控制器有几十个（LimitRanger、DefaultStorageClass、PodSecurity 等），还可以通过 Webhook 扩展。
+
+回到故障场景：`security-scanner` 是一个 MutatingAdmissionWebhook。它在处理链的第 4 步。每个写请求到了这一步，API Server 都要 HTTP 调用 webhook 后端，后端挂了就超时等待 30 秒。大量 goroutine 被阻塞，请求队列溢出，最终连读请求都受影响。
+
+**4. 持久化到 etcd**
+
+通过所有准入控制后，对象被序列化并写入 etcd。
+
+### Watch 机制
+
+Watch 是 K8s 架构的灵魂。它让所有组件能实时感知集群状态变化，而不需要轮询。
+
+```
+客户端 ──HTTP/1.1 chunked transfer──> API Server ──gRPC Watch──> etcd
+```
+
+注意这里的协议差异：
+
+- **客户端 → API Server**：HTTP/1.1 chunked transfer encoding（长连接，服务端不断推送事件）
+- **API Server → etcd**：gRPC 双向流
+
+客户端（比如 Controller Manager）发起 Watch 请求后，API Server 维持一个长连接，每当 etcd 中对应资源发生变化，就通过这个连接推送事件。
+
+为什么不用 gRPC 到客户端？因为 HTTP/1.1 更通用，兼容各种语言的 HTTP 客户端、代理、负载均衡器。而 etcd 是内部组件，用 gRPC 效率更高。
+
+### Informer 机制
+
+直接 Watch API Server 会有问题：如果连接断开再重连，中间的事件可能丢失。client-go 的 **Informer** 机制解决了这个问题：
+
+1. 首次启动时，执行 **List** 获取全量数据，缓存到本地
+2. 然后执行 **Watch**，实时同步增量变化
+3. 连接断开时，基于 `resourceVersion` 重新 Watch，不会丢事件
+4. 本地维护一个 **索引缓存**，读操作直接查本地，不打 API Server
+
+这意味着 Controller Manager 中的几十个 Controller 读取集群状态时，大部分读的是本地缓存，不会给 API Server 施加压力。
+
+### API Server 的无状态特性
+
+API Server 自身不存储任何状态，所有状态都在 etcd 里。这意味着：
+
+- 可以运行多个 API Server 实例做高可用
+- 任何一个实例挂了，直接重启，不丢数据
+- 前面挂个负载均衡器就能水平扩展
+
+> **面试追问：** 为什么 API Server 用 HTTP/1.1 chunked transfer 而不是 gRPC 作为 Watch 协议？
+>
+> 答：兼容性。K8s 的客户端生态非常广泛（kubectl、各种语言的 SDK、Operator），HTTP/1.1 是最通用的协议，几乎所有语言都有成熟的 HTTP 客户端库。而且 HTTP/1.1 能穿透大多数代理和负载均衡器，gRPC 在某些网络环境下有问题。etcd 是内部组件，通信链路可控，所以用 gRPC 获取更好的性能。
+
+---
+
+## etcd：集群的唯一真相源
+
+### 要解决的问题
+
+分布式系统需要一个所有节点都认可的"真相源"。在网络分区、节点故障的情况下，如何保证数据的一致性和可用性？
+
+### 解决方式
+
+etcd 是一个基于 Raft 共识算法的分布式键值存储。它保证了**强一致性** — 任何一次读操作都能读到最新的已提交数据。
+
+### Raft 共识
+
+etcd 通常部署 3 或 5 个节点：
+
+- **3 节点**：容忍 1 个节点故障（需要 2 个节点达成共识）
+- **5 节点**：容忍 2 个节点故障（需要 3 个节点达成共识）
+
+为什么是奇数？因为 Raft 需要"多数派"达成共识。4 个节点和 3 个节点的容错能力一样（都只能容忍 1 个故障），但 4 个节点多了一个需要同步的节点，反而降低了写入性能。
+
+> **一句话记忆：** 3 节点挂 1 个没事，5 节点挂 2 个没事。超过一半挂了，集群就不可用了。
+
+### 存储结构
+
+etcd 中 K8s 数据的存储格式：
+
+```
+/registry/<资源类型>/<namespace>/<名称>
+
+# 示例
+/registry/pods/default/nginx-7d9b8c6f5-x2k4m
+/registry/deployments/kube-system/coredns
+/registry/nodes/worker-01
+/registry/services/specs/default/kubernetes
+```
+
+你可以用 `etcdctl` 直接查看（生产环境慎用）：
+
+```bash
+# 列出所有 key
+ETCDCTL_API=3 etcdctl get /registry --prefix --keys-only
+
+# 查看某个 Pod 的数据（protobuf 编码，需要解码）
+ETCDCTL_API=3 etcdctl get /registry/pods/default/nginx-xxx
+```
+
+存储的数据默认是 protobuf 编码的，不是 JSON。API Server 在读取时会解码成 API 对象。
+
+### 性能特征
+
+etcd 对磁盘延迟非常敏感。几个关键数字：
+
+| 指标 | 建议值 |
+|------|--------|
+| 磁盘 fsync 延迟 | < 10ms |
+| 推荐磁盘类型 | SSD（IOPS > 3000） |
+| 数据库大小上限 | 默认 2GB，可调到 8GB |
+| Key 数量 | 建议 < 100,000 |
+
+如果 etcd 慢了，**整个集群都会慢**。因为 API Server 的每次写操作都要等 etcd 确认持久化成功。
+
+> **实战建议：** 生产环境的 etcd 一定要用独立的 SSD 磁盘，不要和其他服务共享。如果用云服务，选高 IOPS 的磁盘类型。很多"集群突然变慢"的问题，根因是 etcd 磁盘 IO 打满了。
+
+### etcd 与 API Server 的关系
+
+再次强调：**只有 API Server 直接读写 etcd**。这个设计至关重要：
+
+1. **安全性**：etcd 不需要暴露给其他组件，减少攻击面
+2. **一致性**：所有读写都经过 API Server，便于实现乐观并发控制（通过 `resourceVersion`）
+3. **抽象性**：理论上可以换掉 etcd（比如用 Kine + MySQL/PostgreSQL），其他组件完全不需要改动
+
+---
+
+## Controller Manager：自动巡检员
+
+### 要解决的问题
+
+用户声明了期望状态（"我要 3 个 nginx Pod"），谁来确保实际状态和期望状态一致？如果某个 Pod 挂了，谁来自动重建？
+
+### 解决方式
+
+Controller Manager 运行着几十个 **Controller**，每个 Controller 负责一种资源的调谐。它们不断地：
+
+1. **Watch** API Server，获取资源变化事件
+2. **比较** 期望状态（spec）和实际状态（status）
+3. **采取行动** 使实际状态趋近期望状态
+
+这就是 Kubernetes 最核心的设计模式 — **调谐循环（Reconcile Loop）**。
+
+### 核心 Controller 列表
+
+| Controller | 职责 | 类比 |
+|-----------|------|------|
+| Deployment Controller | 管理 ReplicaSet 的创建和滚动更新 | 项目经理 |
+| ReplicaSet Controller | 确保 Pod 副本数符合期望 | 工头 |
+| StatefulSet Controller | 管理有状态应用的有序部署和扩缩 | 排号管理员 |
+| DaemonSet Controller | 确保每个节点上都运行一个 Pod | 物业管理 |
+| Job Controller | 管理一次性任务的执行 | 临时工调度 |
+| CronJob Controller | 管理定时任务 | 闹钟 |
+| Node Controller | 监控节点健康状态，驱逐不健康节点上的 Pod | 安全巡检 |
+| Endpoints Controller | 维护 Service 和 Pod 的映射关系 | 通讯录更新 |
+| Namespace Controller | 清理被删除 Namespace 下的所有资源 | 退租清洁工 |
+| ServiceAccount Controller | 为新 Namespace 创建默认 ServiceAccount | 办公室行政 |
+
+### 调谐循环示意
+
+以 ReplicaSet Controller 为例，假设 `spec.replicas: 3`：
+
+```
+期望状态：3 个 Pod
+实际状态：2 个 Pod（一个刚被 OOMKilled）
+
+差值 = 3 - 2 = 1
+→ 创建 1 个新 Pod（通过 API Server 写入 etcd）
+→ Scheduler 看到新 Pod，分配节点
+→ Kubelet 看到分配给自己的 Pod，启动容器
+→ 实际状态变成 3 个 Pod
+→ 调谐完成
+```
+
+这个循环是**持续运行的**。即使此刻一切正常，Controller 也在不断 Watch，随时准备响应变化。
+
+### Leader Election
+
+Controller Manager 通常部署多个实例做高可用，但**同一时刻只有一个实例在工作**（active-standby 模式）。
+
+为什么？因为如果两个实例同时运行 ReplicaSet Controller，都发现副本不够，各自创建一个新 Pod，就会多出来一个。
+
+Leader Election 的实现很巧妙：利用 K8s 自身的 Lease 对象实现分布式锁。
+
+```bash
+# 查看当前 leader
+kubectl get lease -n kube-system kube-controller-manager -o yaml
+```
+
+```yaml
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: kube-controller-manager
+  namespace: kube-system
+spec:
+  holderIdentity: master-01_xxxxxxxx    # 当前 leader
+  leaseDurationSeconds: 15
+  renewTime: "2026-04-24T10:00:00Z"     # leader 最后续约时间
+```
+
+Leader 每隔几秒钟续约一次 Lease。如果 Leader 挂了，超过 `leaseDurationSeconds` 没有续约，其他实例就会竞争获取 Lease，新的 Leader 接管工作。
+
+切换时间通常在 15-30 秒左右。在这段时间内，Controller 不会响应变化，但因为最终一致性的设计，切换完成后会自动追补遗漏的调谐。
+
+> **面试追问：** Controller Manager 为什么不做多活（active-active），而是用 Leader Election 做主备？
+>
+> 答：因为 Controller 的调谐逻辑是"比较差值然后采取行动"。如果两个实例同时运行同一个 Controller，它们可能同时发现差值并同时采取行动，导致重复操作（比如创建多余的 Pod）。虽然理论上可以用乐观并发控制（resourceVersion 冲突）来处理，但逻辑会变得很复杂。Leader Election 简单可靠，切换时间也足够短。
+
+---
+
+## Scheduler：房产中介
+
+### 要解决的问题
+
+新创建的 Pod 需要运行在某个节点上。选哪个节点？要考虑节点资源是否够用、亲和性规则、污点容忍、数据亲和性等等，这是一个复杂的决策问题。
+
+### 解决方式
+
+Scheduler 是 K8s 的"房产中介"：Pod 是"租客"，Node 是"房源"。Scheduler 的工作就是给每个没有分配节点的 Pod 找到一个合适的节点。
+
+### 调度流程
+
+```mermaid
+flowchart LR
+    A["未调度的 Pod<br/>spec.nodeName 为空"] --> B["Filter 过滤<br/>硬性条件淘汰"]
+    B --> C["Score 打分<br/>软性偏好排名"]
+    C --> D["选择最高分节点"]
+    D --> E["Bind 绑定<br/>写入 spec.nodeName"]
+
+    style B fill:#4ecdc4,color:#fff
+    style C fill:#45b7d1,color:#fff
+    style E fill:#96ceb4,color:#fff
+```
+
+**1. Filter（过滤）— 硬性条件**
+
+淘汰不满足条件的节点。常见的 Filter 插件：
+
+- **NodeResourcesFit**：节点剩余资源是否满足 Pod 的 requests
+- **NodeSelector**：Pod 的 nodeSelector 是否匹配节点标签
+- **TaintToleration**：节点的 Taint 是否被 Pod 容忍
+- **NodeAffinity**：Pod 的 requiredDuringSchedulingIgnoredDuringExecution 是否满足
+- **PodTopologySpread**：Pod 拓扑分布约束是否满足
+
+如果所有节点都被过滤掉了，Pod 会进入 `Pending` 状态，Event 里会显示 `FailedScheduling`。
+
+**2. Score（打分）— 软性偏好**
+
+对通过 Filter 的节点打分排名。常见的 Score 插件：
+
+- **LeastAllocated**：倾向于资源使用率低的节点（分散负载）
+- **MostAllocated**：倾向于资源使用率高的节点（紧凑装箱，节省成本）
+- **NodePreferAvoidPods**：避免调度到被标记的节点
+- **InterPodAffinity**：根据 Pod 间亲和/反亲和打分
+- **ImageLocality**：倾向于已经有 Pod 镜像的节点（减少镜像拉取时间）
+
+**3. Bind（绑定）— 最终操作**
+
+选择最高分的节点后，Scheduler 做的事情非常简单：
+
+```
+PATCH /api/v1/namespaces/{ns}/pods/{name}/binding
+{
+  "target": {
+    "kind": "Node",
+    "name": "worker-03"
+  }
+}
+```
+
+本质上就是**写入 `spec.nodeName`**。Scheduler 不会启动容器、配置网络 — 那些都是 Kubelet 的事。
+
+Scheduler 的角色定义非常清晰：**只做决策，不做执行**。
+
+> **面试追问：** Scheduler 挂了会怎样？
+>
+> 答：已经运行的 Pod 完全不受影响。只有新创建的 Pod 会卡在 `Pending` 状态，因为没人为它们分配节点。Scheduler 重启后，会 Watch 到所有 `spec.nodeName` 为空的 Pod，重新开始调度。因为 Scheduler 也是无状态的，所有状态都在 etcd 里。
+
+---
+
+## Kubelet：工地主管
+
+### 要解决的问题
+
+Scheduler 只是决定了 Pod 应该跑在哪个节点上（写了 `spec.nodeName`），但谁来在那个节点上真正创建容器、配置网络、挂载存储？
+
+### 解决方式
+
+Kubelet 是运行在每个 Worker Node 上的代理进程。它是"工地主管"：拿到施工图纸（Pod spec），指挥工人（Container Runtime、CNI、CSI）完成实际工作。
+
+### 创建 Pod 的详细步骤
+
+当 Kubelet 通过 Watch 发现有一个 Pod 的 `spec.nodeName` 指向自己的节点时，它按照以下顺序执行：
+
+```
+1. 创建 Sandbox（Pause 容器）
+   └─ 这个容器几乎什么都不做，它的作用是持有 Pod 的 Linux namespace
+      （Network Namespace、PID Namespace 等）
+
+2. 调用 CNI 插件配置网络
+   └─ 为 Pod 分配 IP 地址
+   └─ 配置 veth pair、路由规则
+   └─ 设置 Pod 内部的 DNS（/etc/resolv.conf）
+
+3. 调用 CSI 插件挂载存储
+   └─ Attach 云磁盘（如果需要）
+   └─ Mount 文件系统
+   └─ 绑定到 Pod 的指定路径
+
+4. 按顺序启动 Init Containers
+   └─ 一个成功后才启动下一个
+   └─ 任何一个失败，整个 Pod 重新开始
+
+5. 并行启动主容器（main containers）
+   └─ 拉取镜像（如果本地没有）
+   └─ 创建容器、设置环境变量、资源限制
+   └─ 执行启动命令
+```
+
+注意第 1 步的 Pause 容器，这是一个容易被忽略但很重要的设计：Pod 内所有容器共享同一个 Network Namespace，这个 Namespace 由 Pause 容器持有。即使 Pod 内的业务容器崩溃重启，Network Namespace（IP 地址、端口等）也不会变。
+
+### 常驻职责
+
+Kubelet 不只是在创建 Pod 时工作，它还有很多常驻任务：
+
+**1. 节点心跳（Node Lease）**
+
+Kubelet 每 10 秒更新一次 Lease 对象，告诉控制面"我还活着"。如果超过 40 秒没有更新，Node Controller 会将节点标记为 `NotReady`，并开始驱逐上面的 Pod。
+
+```bash
+# 查看节点的 Lease
+kubectl get lease -n kube-node-lease worker-01 -o yaml
+```
+
+**2. 容器健康探测（Probes）**
+
+Kubelet 负责执行三种 Probe：
+
+| Probe | 作用 | 失败后果 |
+|-------|------|---------|
+| **livenessProbe** | 容器是否还活着 | 杀掉容器并重启 |
+| **readinessProbe** | 容器是否准备好接收流量 | 从 Service Endpoints 中移除 |
+| **startupProbe** | 容器是否完成启动 | 在启动期间暂停 liveness 检查 |
+
+一个常见的配置错误：没配 readinessProbe 就直接上线，导致 Pod 还没启动完成就开始接收流量，请求全部失败。
+
+**3. 资源监控和驱逐**
+
+Kubelet 持续监控节点资源使用情况。当磁盘或内存压力过大时，会触发 Pod 驱逐：
+
+- **内存压力**：按 QoS 等级驱逐（BestEffort → Burstable → Guaranteed）
+- **磁盘压力**：清理镜像和已停止容器，必要时驱逐 Pod
+- **PID 压力**：节点 PID 资源不足时驱逐 Pod
+
+**4. 静态 Pod 管理**
+
+Kubelet 可以管理"静态 Pod" — 通过读取本地文件（通常在 `/etc/kubernetes/manifests/`）创建的 Pod，不经过 API Server 调度。控制面组件（API Server、Controller Manager、Scheduler、etcd）在 kubeadm 部署模式下就是静态 Pod。
+
+这带来一个有趣的循环依赖：API Server 是静态 Pod，由 Kubelet 管理。但 Kubelet 又需要连接 API Server。实际上，Kubelet 在 API Server 不可用时仍然能管理静态 Pod，只是无法与控制面同步状态。
+
+---
+
+## kube-proxy：快递转发告示
+
+### 要解决的问题
+
+Service 是 K8s 的服务发现和负载均衡抽象。但 Service 的 ClusterIP 是一个"虚拟 IP"，它不对应任何网卡或进程。那访问 ClusterIP 的流量是怎么到达后端 Pod 的？
+
+### 解决方式
+
+kube-proxy 运行在每个节点上，它 Watch API Server 中 Service 和 Endpoints 的变化，然后在节点上配置**网络规则**（iptables、IPVS 或 nftables），将访问 Service ClusterIP 的流量 DNAT（目标地址转换）到后端 Pod 的实际 IP。
+
+注意：kube-proxy 并不代理实际流量。它只是在每个节点上"贴告示"（写规则），告诉内核"如果看到目标地址是 X，就转发到 Y"。
+
+### DNAT 过程
+
+```mermaid
+flowchart LR
+    A["Pod A 访问<br/>ClusterIP:80<br/>10.96.0.100:80"] --> B["节点 iptables/IPVS<br/>查找 DNAT 规则"]
+    B --> C{"负载均衡<br/>选择后端"}
+    C --> D["Pod B<br/>10.244.1.5:8080"]
+    C --> E["Pod C<br/>10.244.2.3:8080"]
+    C --> F["Pod D<br/>10.244.3.7:8080"]
+
+    style B fill:#f39c12,color:#fff
+```
+
+**具体过程：**
+
+1. Pod A 发送请求到 `10.96.0.100:80`（Service ClusterIP）
+2. 请求到达节点内核的 netfilter 框架
+3. iptables/IPVS 规则匹配目标地址 `10.96.0.100:80`
+4. 将目标地址替换为某个后端 Pod 的实际地址（如 `10.244.1.5:8080`）
+5. 请求被发送到目标 Pod
+
+整个过程在内核态完成，Pod A 完全不知道有 DNAT 发生。
+
+### 三种代理模式
+
+| 模式 | 实现 | 适用场景 | 性能 |
+|------|------|---------|------|
+| **iptables**（默认） | 内核 iptables 规则 | 中小集群（< 5000 Service） | O(n) 规则匹配 |
+| **IPVS** | 内核 IPVS 模块 | 大集群（> 5000 Service） | O(1) 哈希查找 |
+| **nftables** | 内核 nftables | K8s 1.29+ 新选项 | 介于两者之间 |
+
+iptables 模式在 Service 数量很多时会有性能问题，因为 iptables 规则是线性匹配的。10,000 个 Service 意味着 ~50,000 条 iptables 规则，每个数据包都要从头遍历。IPVS 使用哈希表查找，性能与 Service 数量无关。
+
+```bash
+# 查看当前 kube-proxy 模式
+kubectl get configmap kube-proxy -n kube-system -o yaml | grep mode
+
+# iptables 模式下查看规则（输出会很多）
+iptables -t nat -L KUBE-SERVICES
+
+# IPVS 模式下查看规则
+ipvsadm -Ln
+```
+
+> **实战建议：** 如果你的集群有超过 1000 个 Service，建议切换到 IPVS 模式。iptables 模式不仅规则匹配慢，而且每次 Service/Endpoints 变化时需要全量更新 iptables 规则，会导致短暂的网络中断。
+
+---
+
+## 创建 Pod 的完整流程
+
+现在把所有组件串联起来，看一个 `kubectl apply -f deployment.yaml` 的完整生命周期：
+
+```mermaid
+sequenceDiagram
+    participant U as kubectl
+    participant AS as API Server
+    participant etcd as etcd
+    participant CM as Controller Manager
+    participant SCH as Scheduler
+    participant KL as Kubelet
+    participant EC as Endpoints Controller
+    participant KP as kube-proxy
+
+    U->>AS: 1. kubectl apply Deployment
+    AS->>AS: 认证 → 鉴权 → 准入控制
+    AS->>etcd: 2. 持久化 Deployment 对象
+    AS-->>U: 返回成功（注意：此时 Pod 还不存在）
+
+    CM->>AS: 3. Watch 到新 Deployment
+    CM->>AS: 4. 创建 ReplicaSet
+    AS->>etcd: 持久化 ReplicaSet
+
+    CM->>AS: 5. Watch 到新 ReplicaSet
+    CM->>AS: 6. 创建 Pod（spec.nodeName 为空）
+    AS->>etcd: 持久化 Pod
+
+    SCH->>AS: 7. Watch 到未调度的 Pod
+    SCH->>SCH: 8. Filter + Score 选择节点
+    SCH->>AS: 9. Bind：写入 spec.nodeName
+    AS->>etcd: 更新 Pod
+
+    KL->>AS: 10. Watch 到分配给自己的 Pod
+    KL->>KL: 11. 创建 Sandbox + CNI + CSI
+    KL->>KL: 12. 拉取镜像、启动容器
+    KL->>AS: 13. 更新 Pod Status（Running）
+
+    EC->>AS: 14. Watch 到 Pod Ready
+    EC->>AS: 15. 更新 Endpoints（添加 Pod IP）
+
+    KP->>AS: 16. Watch 到 Endpoints 变化
+    KP->>KP: 17. 更新 iptables/IPVS 规则
+```
+
+**关键时间线分析：**
+
+- 步骤 1-2：`kubectl apply` 返回成功。但此时只是 Deployment 对象写入了 etcd，Pod 还不存在。
+- 步骤 3-6：Controller Manager 的级联创建。Deployment → ReplicaSet → Pod，每一步都是独立的调谐循环。
+- 步骤 7-9：Scheduler 选择节点。这一步可能需要几百毫秒到几秒。
+- 步骤 10-13：Kubelet 实际执行。拉取镜像可能需要几十秒甚至几分钟。
+- 步骤 14-17：Service 生效。Pod 的 IP 被加入 Endpoints，kube-proxy 更新规则。
+
+**整个过程没有任何组件直接调用另一个组件。** 所有协作都是通过 API Server 的 Watch 机制异步完成的。这就是声明式架构的力量 — 每个组件只关注自己的职责，通过 Watch 事件触发行动。
+
+---
+
+## 面试追问
+
+### Q1: API Server 挂了，已经运行的 Pod 会怎样？
+
+**短答：不影响已运行的 Pod，但控制面功能全部暂停。**
+
+详细分析：
+
+- ✅ **已运行的 Pod 继续工作** — 容器由 Container Runtime（containerd/CRI-O）管理，它们不依赖 API Server 运行
+- ✅ **Pod 内的网络正常** — kube-proxy 已经配好了 iptables/IPVS 规则，数据面不受影响
+- ❌ **无法创建/删除/更新任何资源** — 所有写操作都需要经过 API Server
+- ❌ **Controller Manager 无法调谐** — 即使 Pod 挂了，也不会自动重建
+- ❌ **Scheduler 无法调度** — 新 Pod 卡在 Pending
+- ❌ **Kubelet 无法上报状态** — 节点状态信息无法更新
+- ❌ **kubectl 完全不可用**
+
+> 本质上，控制面是"管理层"，数据面是"执行层"。管理层挂了，已经在执行的工作不会停止，但新的管理指令无法下达。
+
+### Q2: etcd 数据丢失了怎么办？
+
+**短答：集群完整状态丢失，但正在运行的 Pod 不会立刻停止。**
+
+详细分析：
+
+- 已运行的容器还在，因为 Container Runtime 有自己的状态
+- 但 K8s 不再知道这些 Pod 的存在 — 它们变成了"孤儿"
+- 所有 Deployment、Service、ConfigMap、Secret 的定义全部丢失
+- 集群无法恢复到正常运行状态
+
+**应对措施：**
+
+```bash
+# 定期备份 etcd
+ETCDCTL_API=3 etcdctl snapshot save /backup/etcd-$(date +%Y%m%d).db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+# 验证备份
+ETCDCTL_API=3 etcdctl snapshot status /backup/etcd-20260424.db --write-table
+```
+
+> **生产环境必须有 etcd 自动备份策略。** 建议每小时备份一次，保留最近 7 天的快照。
+
+### Q3: Controller Manager 和 Scheduler 同时挂了会怎样？
+
+**短答：已运行的 Pod 正常工作，但集群失去了"自愈"和"调度"能力。**
+
+- 新创建的 Pod 停在 `Pending`（没人调度）
+- 已运行 Pod 如果挂了，不会被自动重建（没人调谐）
+- Service Endpoints 不会更新（Endpoints Controller 在 Controller Manager 里）
+- 滚动更新、扩缩容全部暂停
+
+但 API Server 和 etcd 还能正常工作，kubectl 可以执行 get/create/delete 操作。
+
+### Q4: Kubelet 挂了，节点上的 Pod 会怎样？
+
+**短答：已运行的容器继续工作，但失去了管理能力。**
+
+- 容器继续运行（由 containerd 管理，不依赖 Kubelet）
+- 但 Probe 不再执行，健康检查失效
+- 节点 Lease 不再续约，约 40 秒后 Node Controller 标记节点为 `NotReady`
+- 默认 5 分钟后，Node Controller 开始驱逐该节点上的 Pod（在其他节点重建）
+- 注意：Pod 驱逐是逻辑上的（标记为 Terminating），如果 Kubelet 没恢复，旧 Pod 实际上不会被清理
+
+> 这就是为什么 `kubectl get pods` 有时会看到某个节点上的 Pod 长期处于 `Terminating` 状态 — Kubelet 挂了，没人执行实际的容器清理。
+
+### Q5: 为什么 K8s 选择声明式架构而不是命令式？
+
+**短答：声明式天然支持自愈和幂等。**
+
+命令式："先创建容器，再配置网络，再挂载存储"
+
+- 如果第二步失败了，需要手动回滚第一步
+- 重试时可能重复创建容器
+- 系统不知道"正确状态"应该是什么
+
+声明式："我要一个 Pod，它应该有这样的网络和存储"
+
+- 调谐循环不断把实际状态推向期望状态
+- 操作天然幂等 — 无论执行多少次调谐，结果都一样
+- 系统崩溃恢复后，只需要重新读取期望状态，继续调谐
+
+一个直观的类比：
+
+- 命令式 = GPS 导航说"前方 200 米左转"（你偏离了路线，它就懵了）
+- 声明式 = 你说"我要去机场"（无论你现在在哪里、怎么偏离，系统总会重新规划路线）
+
+---
+
+## 实战场景
+
+### 场景一：Webhook 拖垮 API Server（本文开头详解）
+
+这就是文章开头讲的故事。总结关键点：
+
+| 项目 | 详情 |
+|------|------|
+| **现象** | kubectl 命令全部超时，新 Pod 无法创建，但已运行 Pod 正常 |
+| **涉及组件** | API Server（Admission Webhook 链） |
+| **根因** | MutatingAdmissionWebhook 后端挂了，每个写请求超时等待 30s，goroutine 大量阻塞 |
+| **排查路径** | API Server 日志 → webhook 超时 → `kubectl get mutatingwebhookconfigurations` → 找到 `failurePolicy: Fail` 的 webhook |
+| **修复** | 临时：`kubectl delete mutatingwebhookconfiguration security-scanner` |
+
+**防御性配置：**
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: my-webhook
+webhooks:
+  - name: mutate.my-webhook.io
+    failurePolicy: Ignore         # 后端不可用时放行，而不是阻塞
+    timeoutSeconds: 5             # 缩短超时时间
+    namespaceSelector:            # 限制作用范围，不要用 "*"
+      matchLabels:
+        webhook-enabled: "true"
+    rules:
+      - apiGroups: ["apps"]       # 只匹配需要的资源
+        apiVersions: ["v1"]
+        resources: ["deployments"]
+        operations: ["CREATE"]
+```
+
+### 场景二：etcd 磁盘 IO 导致集群响应变慢
+
+| 项目 | 详情 |
+|------|------|
+| **现象** | 所有 kubectl 操作变慢（几秒到十几秒），但不超时。Pod 创建延迟明显增大 |
+| **涉及组件** | etcd |
+| **根因** | etcd 和其他服务共用磁盘，IO 被争抢，fsync 延迟从 2ms 飙升到 200ms |
+| **排查路径** | API Server 延迟指标 → etcd 慢日志 → 磁盘 IO 监控 |
+
+**排查命令：**
+
+```bash
+# 查看 etcd 的 fsync 延迟
+# 在 etcd 所在节点
+iostat -x 1
+
+# etcd 自身的指标
+curl -s http://localhost:2379/metrics | grep etcd_disk_wal_fsync_duration
+
+# 如果 99 分位 > 10ms，就需要关注了
+curl -s http://localhost:2379/metrics | grep etcd_disk_backend_commit_duration
+```
+
+**修复：** 将 etcd 数据目录迁移到独立的 SSD 磁盘。
+
+### 场景三：节点 NotReady 导致 Pod 被驱逐到其他节点
+
+| 项目 | 详情 |
+|------|------|
+| **现象** | 某个节点上的所有 Pod 突然被重新调度到其他节点 |
+| **涉及组件** | Kubelet → Node Controller（Controller Manager 内） → Scheduler |
+| **根因** | 节点网络抖动，Kubelet 无法更新 Lease，Node Controller 标记节点 NotReady 并触发驱逐 |
+| **排查路径** | `kubectl get nodes` → 发现 NotReady → `kubectl describe node` → 查看 Conditions 和 Events |
+
+**时间线：**
+
+```
+T+0s    Kubelet 因网络问题停止更新 Lease
+T+40s   Node Controller 标记节点为 NotReady
+T+300s  Node Controller 开始驱逐（默认 pod-eviction-timeout = 5m）
+        - 给 Pod 标记 Termination
+        - 在其他节点重新创建 Pod
+```
+
+**应对措施：**
+
+- 调整 `--pod-eviction-timeout`（默认 5 分钟，视业务场景调整）
+- 对重要的有状态服务使用 `tolerations` 容忍短暂的 NotReady
+- 使用 PodDisruptionBudget（PDB）限制同时被驱逐的 Pod 数量
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-app-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: my-app
+```
+
+### 场景四：Scheduler 调度失败，Pod 一直 Pending
+
+| 项目 | 详情 |
+|------|------|
+| **现象** | Pod 一直处于 Pending 状态，Events 显示 `FailedScheduling` |
+| **涉及组件** | Scheduler |
+| **常见根因** | 资源不足、nodeSelector 不匹配、Taint 没有 Toleration、PVC 未绑定 |
+
+**排查步骤：**
+
+```bash
+# 查看 Pod 事件
+kubectl describe pod <pod-name>
+
+# 常见事件消息及含义
+# "Insufficient cpu"           → 没有节点有足够的 CPU
+# "Insufficient memory"       → 没有节点有足够的内存
+# "node(s) didn't match Pod's node affinity/selector" → 标签不匹配
+# "node(s) had taint {key=value:NoSchedule}" → 需要添加 toleration
+# "persistentvolumeclaim is not bound" → PVC 还没有绑定 PV
+```
+
+```bash
+# 查看各节点可用资源
+kubectl describe nodes | grep -A 5 "Allocated resources"
+
+# 查看节点标签
+kubectl get nodes --show-labels
+
+# 查看节点 Taint
+kubectl describe nodes | grep Taints
+```
+
+**最容易踩的坑：** 设置了 `requests` 但忘了检查集群容量。比如每个 Pod requests 4Gi 内存，集群只有 3 个 8Gi 的节点，去掉系统和 K8s 组件占用后，每个节点实际可用约 6Gi，只能放 1 个 Pod，总共 3 个。如果 Deployment 要求 4 个副本，第 4 个就会永远 Pending。
+
+### 场景五：Service 无法访问后端 Pod
+
+| 项目 | 详情 |
+|------|------|
+| **现象** | 通过 Service ClusterIP 访问返回 `connection refused` 或 `no route to host` |
+| **涉及组件** | kube-proxy、Endpoints Controller |
+| **排查路径** | Service → Endpoints → Pod → kube-proxy 规则，逐层排查 |
+
+**排查步骤：**
+
+```bash
+# 1. 确认 Service 存在且配置正确
+kubectl get svc my-service -o yaml
+
+# 2. 确认 Endpoints 是否有后端 Pod（这步很关键！）
+kubectl get endpoints my-service
+# 如果 Endpoints 为空，说明没有匹配的 Ready Pod
+
+# 3. 确认 Pod 的 labels 和 Service 的 selector 是否匹配
+kubectl get pods --show-labels
+kubectl get svc my-service -o jsonpath='{.spec.selector}'
+
+# 4. 确认 Pod 是否 Ready
+kubectl get pods -o wide
+# 如果 Pod 是 Running 但不是 Ready（0/1），readinessProbe 可能失败了
+
+# 5. 确认 kube-proxy 是否正常
+kubectl get pods -n kube-system -l k8s-app=kube-proxy
+
+# 6. 在节点上检查 iptables/IPVS 规则
+iptables -t nat -L KUBE-SERVICES | grep <clusterIP>
+```
+
+**最常见的原因：** Service 的 `selector` 和 Pod 的 `labels` 不匹配。这种低级错误比你想象的要常见得多。另一个常见原因是 Pod 没配 readinessProbe，容器还在启动但已经被加入 Endpoints，请求打过来但服务还没准备好。
+
+---
+
+## 总结
+
+回到文章开头的故障。一个 MutatingAdmissionWebhook 后端挂了，为什么能搞瘫整个集群？
+
+因为 **API Server 是所有组件的唯一入口**。webhook 是请求处理链（认证 → 鉴权 → 准入控制 → 持久化）的一环。这条链上任何一环阻塞，整条链就阻塞了。而所有组件都依赖 API Server，所以整个控制面都受到了影响。
+
+理解 K8s 架构的关键在于理解这些设计决策背后的 **"为什么"**：
+
+- **为什么所有通信都走 API Server？** — 安全性、一致性、可观测性的统一入口
+- **为什么只有 API Server 访问 etcd？** — 隔离存储层、简化安全模型、便于替换
+- **为什么 Controller 用调谐循环？** — 声明式天然支持自愈和幂等
+- **为什么 Scheduler 只写 `spec.nodeName`？** — 职责单一、解耦执行
+- **为什么 kube-proxy 不代理流量？** — 内核态规则比用户态代理性能高几个数量级
+
+掌握了这些，你排查 K8s 问题的能力会有质的飞跃。不再是"重启试试"，而是根据现象精准定位到出问题的组件，然后在对应的层面去排查。
