@@ -53,7 +53,9 @@ hideMeta: true
 
 **可维护性**：主导 Registration/Work/Placement 等多仓库合并为 [Mono Repo](https://github.com/open-cluster-management-io/ocm/issues/128#issuecomment-1552536628)，统一依赖管理和 CI/CD 流程，减少跨仓库维护开销
 
-**文档与社区**：主导 OCM 社区文档网站重构（[PR #429](https://github.com/open-cluster-management-io/open-cluster-management-io.github.io/pull/429)，+1,856 / -11,626 行）— 迁移 Google Docsy 主题（K8s/Istio/gRPC 等 CNCF 项目标准选择），砍掉无实际维护的中文文档（48/55 文件仅标题中文），文件数减少 46%，降低社区参与门槛
+**文档与社区**：
+- 利用 AI 技术为 OCM 上游社区创建 [Dashboard](https://github.com/open-cluster-management-io/lab/tree/main/dashboard)，已有外部团队采用并计划贡献新功能回上游
+- 主导 OCM 社区文档网站重构（[PR #429](https://github.com/open-cluster-management-io/open-cluster-management-io.github.io/pull/429)，+1,856 / -11,626 行）— 迁移 Google Docsy 主题（K8s/Istio/gRPC 等 CNCF 项目标准选择），砍掉无实际维护的中文文档（48/55 文件仅标题中文），文件数减少 46%，降低社区参与门槛
 
 ---
 
