@@ -14,7 +14,7 @@ ShowReadingTime: true
 
 周五下午 4 点，线上告警群突然炸了：Nginx Ingress 返回大量 502 Bad Gateway。
 
-排查发现，问题出在一次常规的 Deployment 滚动更新。每次新 Pod ready、旧 Pod 被终止的那几秒钟，总有零星请求打到了已经关闭端口的旧 Pod 上。
+排查发现，问题出在一次常规的 Deployment 滚动更新。每次新 Pod ready、旧 Pod 被终止的那几秒钟，总有零星请求被路由到了已经关闭端口的旧 Pod 上。
 
 根因其实很简单——旧 Pod 收到 `SIGTERM` 后**立即**关闭了监听端口，但 kube-proxy 还没来得及把这个 Pod 的 IP 从 iptables/IPVS 规则里摘掉。在这个窗口期内，流量仍然会被转发到旧 Pod，得到的就是 `connection refused` → Ingress 返回 502。
 
