@@ -1,7 +1,7 @@
 ---
 title: "从一次 Webhook 拖垮集群聊起：彻底搞懂 K8s 架构设计"
 date: 2026-04-24
-draft: true
+draft: false
 tags: ["Kubernetes", "架构", "API Server", "etcd", "中文"]
 summary: "一个 MutatingAdmissionWebhook 后端挂掉导致整个集群'假死'，排查过程串联起 K8s 所有核心组件的职责与协作：API Server 的请求处理链、etcd 的唯一真相源角色、Controller Manager 的 Reconcile 循环、Scheduler 的选房策略、Kubelet 的工地执行、kube-proxy 的网络粘合。"
 weight: 1
