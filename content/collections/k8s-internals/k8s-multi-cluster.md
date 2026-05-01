@@ -1,7 +1,7 @@
 ---
 title: "从管理 200+ 集群的实战经验聊起：K8s 多集群架构设计与性能优化"
 date: 2026-04-24
-draft: true
+draft: false
 tags: ["Kubernetes", "多集群", "ACM", "OCM", "架构设计", "中文"]
 summary: "5 年 ACM 多集群管理经验的系统总结：Hub-Spoke vs 联邦架构的本质区别、ManifestWork 资源分发与 Placement 调度的设计、CSR 注册与反向隧道网络互通、以及管理 200+ 集群时遇到的真实性能挑战和优化方案。"
 weight: 9
@@ -16,7 +16,7 @@ ShowReadingTime: true
 
 我在 Red Hat ACM（Advanced Cluster Management）团队工作了 5 年，ACM 基于开源项目 OCM（Open Cluster Management）构建，是目前业界最成熟的 Kubernetes 多集群管理方案之一。从最初的功能开发到后来的大规模性能优化，我经历了从"能管"到"管好"的完整过程。
 
-这篇文章不是文档翻译，而是我对多集群管理的**系统性思考和实战经验总结**。我会覆盖架构选型、资源分发、集群注册、网络互通、性能优化五个核心主题，每个主题后附面试追问，帮你建立完整的多集群知识体系。
+这篇文章不是文档翻译，而是我对多集群管理的**系统性思考和实战经验总结**。我会覆盖架构选型、资源分发、集群注册、网络互通、性能优化五个核心主题，每个主题后附Q&A，帮你建立完整的多集群知识体系。
 
 ---
 
@@ -26,14 +26,15 @@ ShowReadingTime: true
 
 多集群管理本质上是一个**控制论问题**：一个中心（或多个中心）如何对多个被管理实体施加控制。业界形成了两种主流架构：
 
-| 维度 | Hub-Spoke (Pull Mode) | Federation (Push Mode) |
-|------|----------------------|----------------------|
-| 代表项目 | OCM / ACM | KubeFed / Karmada |
+| 维度 | Pull Mode | Push Mode |
+|------|-----------|-----------|
 | 控制方向 | Spoke 主动拉取任务 | Hub 主动推送到 Spoke |
 | 网络要求 | Spoke → Hub（出站即可） | Hub → Spoke（需入站） |
 | Agent 部署 | 每个 Spoke 部署 Agent | 无 Agent 或轻量 Agent |
 | 集群自治 | Hub 挂了，Spoke 继续运行 | Hub 挂了，新变更无法下发 |
-| 典型规模 | 数百到数千集群 | 数十到数百集群 |
+| 适合场景 | 大规模、跨网络、边缘 | 同数据中心、网络互通 |
+
+**代表项目**：OCM/ACM 采用 Pull Mode；KubeFed 采用 Push Mode；**Karmada 同时支持 Push 和 Pull 两种模式**——Push 模式适合同数据中心内网络互通的场景，Pull 模式通过部署 `karmada-agent` 到成员集群来适配跨网络、大规模场景。
 
 ### Hub-Spoke 架构全景
 
@@ -141,7 +142,7 @@ Pull Mode 不是没有代价：
 
 ---
 
-### 面试追问
+### Q&A
 
 **Q1：Hub-Spoke 架构中 Hub 是单点故障吗？怎么解决？**
 
@@ -164,10 +165,11 @@ Hub 确实是架构中的关键节点，但不是传统意义上的"单点故障
 
 **Q3：OCM 和 KubeFed/Karmada 的本质区别是什么？**
 
-不只是 Pull vs Push：
-- **OCM** 把 Spoke 当作黑盒，只通过 ManifestWork 和 Status 交互，最大程度尊重集群自治
-- **KubeFed/Karmada** 把 Spoke 当作 Hub 的延伸，直接操作 Spoke 资源，控制粒度更细但耦合更紧
-- **设计哲学**：OCM 更像"联邦制"（自治 + 协调），KubeFed/Karmada 更像"中央集权"（统一控制）
+三者都支持多集群管理，但设计哲学不同：
+- **OCM** 把 Spoke 当作黑盒，只通过 ManifestWork 和 Status 交互，最大程度尊重集群自治，纯 Pull Mode
+- **KubeFed** 把 Spoke 当作 Hub 的延伸，直接操作 Spoke 资源，纯 Push Mode
+- **Karmada** 同时支持 Push 和 Pull 两种模式，Push 模式下直接操作成员集群 API Server，Pull 模式下通过 `karmada-agent` 拉取任务，灵活性更高
+- **设计哲学**：OCM 更像"联邦制"（自治 + 协调），KubeFed 更像"中央集权"（统一控制），Karmada 介于两者之间（可选）
 
 ---
 
@@ -310,7 +312,7 @@ Step 5: 生成 PlacementDecision
 
 ---
 
-### 面试追问
+### Q&A
 
 **Q1：ManifestWork 怎么处理冲突？如果有人直接在 Spoke 上修改了资源怎么办？**
 
@@ -363,7 +365,7 @@ sequenceDiagram
 
     Note over Agent, Hub: 阶段2: 正常通信
     Agent->>Hub: 使用客户端证书 (mTLS) 访问 Hub API
-    Agent->>Hub: Watch ManifestWork (namespace: <cluster-name>)
+    Agent->>Hub: Watch ManifestWork (namespace: cluster-name)
     Agent->>Hub: 定期更新 Lease (心跳)
     Agent->>Hub: 上报 ManagedCluster status
 
@@ -375,20 +377,33 @@ sequenceDiagram
 
 ### Bootstrap 详解
 
-Bootstrap 是集群注册的起点，整个过程与 kubelet 的 TLS Bootstrap 高度相似：
+Bootstrap 是集群注册的起点，整个过程与 kubelet 的 TLS Bootstrap 高度相似。
 
-1. **管理员准备**：在 Hub 上创建一个 bootstrap ServiceAccount，生成 token。这个 token 的权限非常有限——只能创建 CSR 和 ManagedCluster 对象。
+先解释一个关键概念——**CSR（Certificate Signing Request，证书签名请求）**。CSR 是 Kubernetes 内置的 API 资源（`certificates.k8s.io/v1`），它的作用是让集群内的组件向 API Server 申请 X.509 客户端证书。流程是：申请方生成一对密钥（公钥 + 私钥），把公钥和身份信息封装成 CSR 对象提交给 API Server，API Server 侧的 CSR Controller（或管理员）审批后签发证书。kubelet 加入集群时用的就是这个机制。
+
+理解了 CSR 之后，来看 Bootstrap 的四个步骤：
+
+1. **管理员准备**：在 Hub 上创建一个 bootstrap ServiceAccount，生成 token。这个 token 的权限非常有限——只能创建 CSR 和 ManagedCluster 对象，**不能读写 ManifestWork 或其他任何资源**。
 
 2. **Agent 启动**：Agent 带着 bootstrap token 和 Hub API Server 地址启动。第一次连接使用 token 认证。
 
-3. **CSR 签发**：Agent 生成本地密钥对，将公钥封装成 CSR 发送给 Hub。Hub 端的 CSR Controller（或管理员手动）Approve CSR 后，签发客户端证书。
+3. **CSR 签发**：Agent 在本地生成密钥对，将公钥封装成 CSR 提交给 Hub。CSR 中包含期望的身份信息——CN（Common Name）设为 `system:open-cluster-management:<cluster-name>:<agent-name>`。Hub 端的 CSR Controller（或管理员手动）Approve CSR 后，用 Hub 的 CA 签发客户端证书。
 
-4. **切换到 mTLS**：Agent 拿到客户端证书后，后续所有通信使用 mTLS（双向 TLS），bootstrap token 作废。
+4. **切换到 mTLS**：Agent 拿到客户端证书后，后续所有通信使用 mTLS（双向 TLS），bootstrap token 不再使用。
+
+**权限是怎么"扩展"的？** 关键在于：bootstrap token 和签发后的证书是**两套完全不同的身份**，背后绑定的 RBAC 权限也不同：
+
+| 阶段 | 身份 | RBAC 权限 |
+|------|------|-----------|
+| Bootstrap 阶段 | ServiceAccount token | 只能创建 CSR 和 ManagedCluster |
+| 证书签发后 | 证书 CN: `system:open-cluster-management:<cluster-name>:...` | 可以读写对应 namespace 下的 ManifestWork、更新 Lease、上报 Status |
+
+Hub 管理员预先为 `system:open-cluster-management:<cluster-name>:*` 这个身份模式创建了 RBAC RoleBinding，绑定到对应 namespace 的权限。所以 Agent 拿到证书后，API Server 通过证书中的 CN 识别身份，匹配到预设的 RBAC 规则，就自动获得了更大的权限。**不是证书本身扩展了权限，而是证书中的身份匹配到了预设的 RBAC 规则。**
 
 关键安全设计：
 - **Bootstrap token 是一次性的**：用完即弃，减少泄露风险
-- **最小权限**：bootstrap token 只有创建 CSR 和 ManagedCluster 的权限
-- **证书绑定身份**：证书的 CN（Common Name）是 `system:open-cluster-management:cluster-name:agent-name`，通过 RBAC 绑定到对应的 namespace 权限
+- **最小权限**：bootstrap token 只有创建 CSR 和 ManagedCluster 的权限，即使泄露也做不了什么
+- **证书绑定身份**：证书的 CN 包含集群名称，通过 RBAC 精确限定到对应 namespace 的权限
 
 ### 证书轮换
 
@@ -418,12 +433,33 @@ Hub Cluster:
     └── ...
 ```
 
-Agent 的证书中 CN 包含集群名称，Hub 通过 RBAC 确保每个 Agent 只能：
+**注意**：证书 CN 中的身份（如 `system:open-cluster-management:cluster1:agent`）在 Kubernetes RBAC 中是一个 **User**，不是 ServiceAccount。虽然命名格式看起来很像 ServiceAccount（`system:serviceaccount:<ns>:<name>`），但它们是两套完全独立的身份体系——客户端证书的 CN 被 API Server 解析为 User，SA token 被解析为 ServiceAccount，两者都能作为 RBAC 的 Subject，但来源不同。
+
+Hub 管理员预先为这个 User 身份创建 RoleBinding：
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cluster1-agent
+  namespace: cluster1
+subjects:
+- kind: User    # 不是 ServiceAccount
+  name: "system:open-cluster-management:cluster1:agent"
+roleRef:
+  kind: ClusterRole
+  name: open-cluster-management:agent
+  apiGroup: rbac.authorization.k8s.io
+```
+
+整条认证授权链路：Agent 用证书连 Hub API Server → API Server 从证书 CN 提取 User 身份 → 查 RBAC 找到上面的 RoleBinding → 确认该 User 有权限操作 `cluster1` namespace 下的资源。
+
+通过这种方式，Hub 确保每个 Agent 只能：
 - 读写自己 namespace 下的 ManifestWork status
 - 更新自己的 ManagedCluster status
 - 更新自己的 Lease
 
-这种设计意味着，即使某个 Spoke 的 Agent 被攻破，攻击者也只能影响该集群对应的 namespace，无法越权访问其他集群的数据。
+即使某个 Spoke 的 Agent 被攻破，攻击者也只能影响该集群对应的 namespace，无法越权访问其他集群的数据。
 
 ### 心跳机制
 
@@ -444,7 +480,7 @@ Agent 通过 Kubernetes Lease 对象上报心跳：
 
 ---
 
-### 面试追问
+### Q&A
 
 **Q1：如果 bootstrap token 泄露了怎么办？**
 
@@ -490,30 +526,27 @@ OCM 的 Cluster-Proxy 组件通过**反向隧道**解决这个问题：
 
 ```mermaid
 graph LR
-    subgraph Hub Cluster
-        User[kubectl / Controller]
-        PS[Cluster-Proxy Server]
-        API[API Server]
+    subgraph Hub["Hub Cluster"]
+        User["kubectl / Controller"]
+        PS["Cluster-Proxy Server"]
+        API["API Server"]
     end
 
-    subgraph NAT / Firewall
+    subgraph Spoke["Spoke Cluster"]
+        PA["Cluster-Proxy Agent"]
+        SA["Spoke API Server"]
     end
 
-    subgraph Spoke Cluster
-        PA[Cluster-Proxy Agent]
-        SA[Spoke API Server]
-    end
+    User -->|"1. 请求 Spoke 资源"| API
+    API -->|"2. 转发到 Proxy"| PS
+    PS -->|"3. 通过反向隧道"| PA
+    PA -->|"4. 请求本地 API"| SA
+    SA -->|"5. 响应"| PA
+    PA -->|"6. 回传"| PS
+    PS -->|"7. 返回结果"| API
+    API -->|"8. 响应"| User
 
-    User -->|1. 请求 Spoke 资源| API
-    API -->|2. 转发到 Proxy| PS
-    PS -->|3. 通过反向隧道| PA
-    PA -->|4. 请求本地 API| SA
-    SA -->|5. 响应| PA
-    PA -->|6. 回传| PS
-    PS -->|7. 返回结果| API
-    API -->|8. 响应| User
-
-    PA -.->|gRPC 长连接 (Spoke 主动建立)| PS
+    PA -.->|"gRPC 长连接<br/>Spoke 主动建立"| PS
 ```
 
 ### 实现细节
@@ -567,7 +600,7 @@ Cluster-Proxy 的安全设计包含两层访问控制：
 
 ---
 
-### 面试追问
+### Q&A
 
 **Q1：gRPC 长连接断了怎么办？重连机制是怎么实现的？**
 

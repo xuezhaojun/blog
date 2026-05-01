@@ -1,7 +1,7 @@
 ---
 title: "从一次 database space exceeded 聊起：彻底搞懂 etcd 在 K8s 中的角色"
 date: 2026-04-24
-draft: true
+draft: false
 tags: ["Kubernetes", "etcd", "Raft", "MVCC", "中文"]
 summary: "管理 200+ 集群时 CR 大量累积触发 etcd space quota，所有写操作报 mvcc: database space exceeded。排查过程揭开 etcd 的全部秘密：Raft 共识如何保证一致性、MVCC 如何实现乐观并发控制、watch 如何驱动整个 K8s 事件循环，以及 compaction 和 defrag 为什么要分两步。"
 weight: 4
@@ -369,7 +369,7 @@ etcd 的写入性能严重依赖磁盘 I/O，特别是 **fsync 延迟**：
 
 ---
 
-## 面试追问
+## Q&A
 
 ### Q1: etcd 如何备份和恢复？
 

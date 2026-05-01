@@ -241,7 +241,7 @@ API Server 自身不存储任何状态，所有状态都在 etcd 里。这意味
 - 任何一个实例挂了，直接重启，不丢数据
 - 前面挂个负载均衡器就能水平扩展
 
-> **面试追问：** 为什么 API Server 用 HTTP/1.1 chunked transfer 而不是 gRPC 作为 Watch 协议？
+> **Q&A：** 为什么 API Server 用 HTTP/1.1 chunked transfer 而不是 gRPC 作为 Watch 协议？
 >
 > 答：兼容性。K8s 的客户端生态非常广泛 — Go 有 [client-go](https://github.com/kubernetes/client-go)，Python 有 [kubernetes-client/python](https://github.com/kubernetes-client/python)，Java 有 [fabric8io/kubernetes-client](https://github.com/fabric8io/kubernetes-client)；Operator 方面，Prometheus Operator、Istio、ArgoCD 等都通过 HTTP 与 API Server 通信。HTTP/1.1 是最通用的协议，几乎所有语言都有成熟的 HTTP 客户端库。
 >
@@ -432,7 +432,7 @@ Leader 每隔几秒钟续约一次 Lease。如果 Leader 挂了，超过 `leaseD
 
 切换时间通常在 15-30 秒左右。在这段时间内，Controller 不会响应变化，但因为最终一致性的设计，切换完成后会自动追补遗漏的 Reconcile。
 
-> **面试追问：** Controller Manager 为什么不做多活（active-active），而是用 Leader Election 做主备？
+> **Q&A：** Controller Manager 为什么不做多活（active-active），而是用 Leader Election 做主备？
 >
 > 答：核心原因是 **trade-off 不划算**。
 >
@@ -508,11 +508,11 @@ PATCH /api/v1/namespaces/{ns}/pods/{name}/binding
 
 Scheduler 的角色定义非常清晰：**只做决策，不做执行**。
 
-> **面试追问：** Scheduler 挂了会怎样？
+> **Q&A：** Scheduler 挂了会怎样？
 >
 > 答：已经运行的 Pod 完全不受影响。只有新创建的 Pod 会卡在 `Pending` 状态，因为没人为它们分配节点。Scheduler 重启后，会 Watch 到所有 `spec.nodeName` 为空的 Pod，重新开始调度。因为 Scheduler 也是无状态的，所有状态都在 etcd 里。
 
-> **面试追问：** 如果手动把一个已运行 Pod 的 `spec.nodeName` 清空，Scheduler 会重新调度它吗？
+> **Q&A：** 如果手动把一个已运行 Pod 的 `spec.nodeName` 清空，Scheduler 会重新调度它吗？
 >
 > 答：不会。首先，API Server 大概率会直接拒绝这个修改 — Pod 的很多 spec 字段在创建后是 immutable 的。即使修改成功，Scheduler 也不会重新调度它，因为 **Scheduler 只 Watch `spec.nodeName` 为空的新 Pod**，不会关注已有 Pod 的 nodeName 变化。而原来节点上的 Kubelet 发现这个 Pod 不再属于自己，会停掉容器，Pod 就直接挂了。想让 Pod 换节点，正确做法是**删除 Pod 让上层 Controller（Deployment/ReplicaSet）重建** — 新 Pod 的 `spec.nodeName` 为空，Scheduler 自然会重新调度。这也体现了 K8s 各组件的职责边界：Controller 管"要不要重建"，Scheduler 管"新 Pod 放哪"，各司其职。
 
@@ -771,7 +771,7 @@ sequenceDiagram
 
 ---
 
-## 面试追问
+## Q&A
 
 ### Q1: API Server 挂了，已经运行的 Pod 会怎样？
 

@@ -1,7 +1,7 @@
 ---
 title: "从一次 pods/exec forbidden 聊起：彻底搞懂 K8s RBAC 权限模型"
 date: 2026-04-24
-draft: true
+draft: false
 tags: ["Kubernetes", "RBAC", "安全", "ServiceAccount", "中文"]
 summary: "kubectl get pods 正常，但 kubectl exec 报 forbidden: cannot create resource pods/exec。排查过程揭开 RBAC 的全部细节：Role 和 ClusterRole 的作用域、Binding 的组合关系、ServiceAccount 的 Token 演进、子资源权限的隐藏坑，以及多租户隔离的最佳实践。"
 weight: 8
@@ -271,23 +271,38 @@ spec:
 
 ### ServiceAccount 最佳实践
 
+**1. 为每个应用创建专用 SA，不要给 default SA 加权限**
+
 ```yaml
-# 1. 创建专用 SA
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: my-controller
   namespace: app-system
-automountServiceAccountToken: false  # 2. 默认关闭自动挂载
+```
+
+**2. 不需要调 K8s API 的 Pod，关闭 token 自动挂载**
+
+`automountServiceAccountToken` 默认为 `true`，即每个 Pod 都会自动挂载 SA token。如果你的 Pod 不需要访问 K8s API（比如纯业务应用），可以关闭它来减少攻击面（参考 [官方文档](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#opt-out-of-api-credential-automounting)）：
+
+```yaml
+# 在 SA 级别关闭（该 SA 下所有 Pod 默认不挂载）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-app
+automountServiceAccountToken: false
 
 ---
-# 3. 只在需要的 Pod 中显式挂载
+# 或者在 Pod 级别关闭（Pod 级别优先级更高）
 apiVersion: v1
 kind: Pod
 spec:
-  serviceAccountName: my-controller
-  automountServiceAccountToken: true  # 显式启用
+  serviceAccountName: web-app
+  automountServiceAccountToken: false
 ```
+
+> **注意**：需要调 K8s API 的 Pod（如 Controller、Operator）必须保持 `true`，否则无法认证。1.24+ 之后自动挂载的 token 已经是短期的（默认 1 小时过期），安全性比以前好很多，所以这个配置是**安全加固**手段，不是强制要求。大部分 Helm chart 没有显式设置这个字段，用的就是默认的 `true`，这在大多数场景下是可以接受的。
 
 ---
 
@@ -351,7 +366,7 @@ view           2024-01-01T00:00:00Z
 
 ---
 
-## 面试追问
+## Q&A
 
 ### Q1：认证（Authentication）和授权（Authorization）有什么区别？
 
@@ -742,7 +757,7 @@ roleRef:
 - 排查权限问题的第一步永远是 `kubectl auth can-i`，而不是翻 Role 定义。它能直接告诉你某个主体对某个资源有没有某个操作权限。
 - 1.24+ 之后 SA token 默认 1 小时过期，如果你的代码在启动时一次性读取 token 并缓存，迟早会遇到间歇性 401。用 `rest.InClusterConfig()` 或每次请求前重新读文件。
 - 需要跨多个 namespace 用同一套权限时，定义一个 ClusterRole 然后在每个 namespace 用 RoleBinding 绑定——比在每个 namespace 重复创建 Role 干净得多。
-- 永远不要给 default ServiceAccount 加权限。为每个应用创建专用 SA，并默认关闭 `automountServiceAccountToken`，只在需要时显式开启。
+- 永远不要给 default ServiceAccount 加权限。为每个应用创建专用 SA。不需要调 K8s API 的 Pod 可以关闭 `automountServiceAccountToken` 来减少攻击面，但这是安全加固手段，不是强制要求——1.24+ 的短期 token 已经大幅降低了泄露风险。
 
 ## 总结
 

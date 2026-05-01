@@ -1,7 +1,7 @@
 ---
 title: "从一次 Pod Pending 但节点资源充足聊起：彻底搞懂 K8s 调度器原理"
 date: 2026-04-24
-draft: true
+draft: false
 tags: ["Kubernetes", "Scheduler", "调度", "抢占", "中文"]
 summary: "kubectl describe pod 显示 0/5 nodes available: Insufficient cpu，但 kubectl top nodes 显示 CPU 使用率才 30%。排查过程揭开调度器的全部秘密：Scheduler Framework 的完整扩展点链、Filter 和 Score 的内置插件、抢占机制、以及 TopologySpread 的死锁陷阱。"
 weight: 5
@@ -368,7 +368,7 @@ spec:
 
 ---
 
-## 面试追问
+## Q&A
 
 ### Q1: 怎么保证 Pod 不被调度到资源不足的 Node？
 

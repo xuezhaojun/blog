@@ -377,7 +377,7 @@ Operator 的核心价值在于：**把人类运维专家的知识编码成软件
 
 大多数 Go 语言 Operator 项目选择 **Kubebuilder** 或 **Operator SDK** 作为起点。
 
-## 面试追问
+## Q&A
 
 ### Q1：为什么用 WorkQueue 而不是直接在 Event Handler 里处理？
 
