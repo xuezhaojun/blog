@@ -33,10 +33,12 @@ kubectl apply 失败，新 Pod 调度不了，HPA 扩容停滞。整个集群进
 - **唯一的持久化存储**：集群中所有资源对象（Pod、Service、Deployment、ConfigMap、CRD...）的期望状态和实际状态，全部存储在 etcd 中。
 - **唯一的客户端：API Server**。kubelet、Controller Manager、Scheduler 都不会直接访问 etcd，它们全部通过 API Server 间接读写。API Server 是 etcd 的「守门人」。
 
-```
-kubelet ──┐
-scheduler ─┤──→ API Server ──→ etcd
-controller ─┘
+```mermaid
+graph LR
+    kubelet --> APIServer[API Server]
+    scheduler --> APIServer
+    controller --> APIServer
+    APIServer --> etcd
 ```
 
 这意味着：
@@ -50,15 +52,24 @@ controller ─┘
 
 ## Raft 共识算法：如何让多个节点达成一致
 
+Raft 的核心思想是**日志复制**。这里的"日志"不是程序打印的调试日志，而是**每一次数据写入操作的有序记录**——比如 `PUT /pods/nginx = {...}`、`DELETE /services/my-svc`。etcd 把所有写操作按顺序记录到日志中（WAL，Write-Ahead Log），然后把这份日志复制到集群中的其他节点。只要多数节点都持有同一份日志，数据就不会丢失。
+
+etcd 每个节点的内部存储分两层：
+
+- **WAL（Write-Ahead Log）**：写操作的有序日志文件，用于 Raft 复制和故障恢复
+- **boltdb**：etcd 内部的存储引擎，一个本地的嵌入式 KV 数据库文件。日志被 commit 后，数据 apply 到 boltdb 中，读请求从 boltdb 读取
+
+类比：etcd 之于 boltdb，就像 MySQL 之于 InnoDB——etcd 是面向用户的分布式数据库，boltdb 是每个节点本地的存储引擎。后面提到的"apply 到状态机"就是指写入 boltdb。
+
 ### 三种角色
 
 Raft 协议中，每个 etcd 节点在任意时刻只会处于三种角色之一：
 
 | 角色 | 职责 |
 |------|------|
-| **Leader** | 接收所有写请求，将日志复制到 Follower，驱动共识流程 |
-| **Follower** | 被动接收 Leader 的日志复制和心跳，不主动发起请求 |
-| **Candidate** | Follower 超时未收到心跳后转变为 Candidate，发起选举 |
+| **Leader**（领导者） | 接收所有写请求，将日志复制到 Follower，驱动共识流程 |
+| **Follower**（跟随者） | 被动接收 Leader 的日志复制和心跳，不主动发起请求 |
+| **Candidate**（候选人） | Follower 超时未收到心跳后转变为 Candidate，发起选举 |
 
 正常运行时，集群中只有 **一个 Leader**，其余全是 Follower。
 
@@ -66,47 +77,71 @@ Raft 协议中，每个 etcd 节点在任意时刻只会处于三种角色之一
 
 一次完整的写操作如何在 Raft 集群中完成？以 3 节点集群为例：
 
-```
-               ┌──────────────────────────────────────────────────────────┐
-               │                    写入流程时序                          │
-               └──────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant L as Leader
+    participant F1 as Follower-1
+    participant F2 as Follower-2
 
-  Client          Leader            Follower-1          Follower-2
-    │                │                   │                   │
-    │─── PUT key ───→│                   │                   │
-    │                │                   │                   │
-    │                │── Append Log ──→  │                   │
-    │                │── Append Log ──────────────────────→  │
-    │                │                   │                   │
-    │                │                   │                   │
-    │                │←─ ACK ───────────│                   │
-    │                │←─ ACK ─────────────────────────────  │
-    │                │                   │                   │
-    │                │  [多数确认, commit]  │                   │
-    │                │                   │                   │
-    │                │── Commit 通知 ──→ │                   │
-    │                │── Commit 通知 ──────────────────────→ │
-    │                │                   │                   │
-    │←── 写入成功 ──│                   │                   │
-    │                │                   │                   │
+    C->>L: PUT key
+    par 并行复制日志
+        L->>F1: Append Log
+        L->>F2: Append Log
+    end
+    F1-->>L: ACK
+    F2-->>L: ACK
+    Note over L: 多数确认, commit
+    par 通知 commit
+        L->>F1: Commit 通知
+        L->>F2: Commit 通知
+    end
+    L-->>C: 写入成功
 ```
 
 关键步骤：
 
 1. **Client 发送写请求到 Leader**（如果发到 Follower，会被转发到 Leader）
 2. **Leader 将操作写入本地 WAL 日志**（Write-Ahead Log），并行发送 AppendEntries RPC 给所有 Follower
-3. **Follower 写入自己的 WAL 日志**，返回 ACK
+3. **Follower 写入自己的 WAL 日志**，返回 ACK。注意：此时 Follower 只是说"日志我收到了"，但它不知道其他节点是否也收到了
 4. **Leader 收到多数派确认**（包括自己，3 节点中需要 2 个确认）后，将日志标记为 committed
 5. **Leader apply 到状态机**（即 boltdb），返回成功给 Client
 6. **Leader 通过后续心跳通知 Follower commit**，Follower 也 apply 到本地状态机
 
-> 为什么是「多数派」？因为只要多数节点存活并达成一致，即使少数节点故障，集群仍然能正常工作。这就是 **Quorum 机制**。
+**为什么还需要 Commit 通知？** 因为 Follower 返回 ACK 只代表"日志写到本地了"，但 Follower 没有全局视角——它不知道其他节点有没有成功。只有 Leader 知道"多数派已确认"。Commit 通知就是告诉 Follower："这条日志已经被多数派确认，你可以安全地 apply 到状态机（boltdb）了。" 没有 Commit 通知的话，Follower 的数据只存在日志里，不会写入 boltdb，客户端读不到。
+
+> 为什么是「多数派」？因为只要多数节点存活并达成一致，即使少数节点故障，集群仍然能正常工作。这就是 **Quorum（法定人数）机制**——借用议会术语：投票必须达到法定最低出席人数，决议才有效。Raft 中就是"超过半数节点确认，写入才生效"。
+
+**写入失败的情况：** 如果多数派没有确认呢？以 3 节点集群为例，假设两个 Follower 都出了问题：
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant L as Leader
+    participant F1 as Follower-1
+    participant F2 as Follower-2
+
+    C->>L: PUT key
+    par 并行复制日志
+        L->>F1: Append Log
+        L->>F2: Append Log
+    end
+    F1--xL: 网络超时，无响应
+    F2--xL: 节点宕机，无响应
+    Note over L: 只有自己 1 票<br/>不满足 Quorum(2)
+    L-->>C: 写入超时/失败
+    Note over L: 日志不会被标记为 committed<br/>不会 apply 到 boltdb<br/>数据不生效
+```
+
+Leader 加上自己只有 1 票，不满足 Quorum（需要 2 票），所以这条日志**不会被 commit**——不会 apply 到 boltdb，不会通知 Follower，Client 收到写入失败。数据就像从未存在过一样。
+
+当 Follower 恢复后，这条未 commit 的日志会被新 Leader 的日志覆盖，保证集群数据一致性。
 
 ### Leader 选举
 
-当 Follower 在 **election timeout**（通常 1000-1500ms 随机值）内没有收到 Leader 的心跳（默认 100ms 间隔），它会：
+当 Follower 在 **election timeout（选举超时时间）**（通常 1000-1500ms 随机值）内没有收到 Leader 的心跳（默认 100ms 间隔），它会：
 
-1. 将自己的 term（任期号）+1
+1. 将自己的 **term（任期号）**+1——term 借用政治术语"任期"，每次选举开启新一届任期，用来区分不同时期的 Leader
 2. 转变为 Candidate
 3. 先投自己一票，然后向所有其他节点发送 RequestVote RPC
 4. 如果收到多数票，成为新 Leader
@@ -156,36 +191,39 @@ metadata:
   resourceVersion: "384920"   # ← 这就是 etcd 的 revision
 ```
 
+这个数字看起来很大——你刚创建一个 ConfigMap，`resourceVersion` 就已经是 38 万了。这是因为 revision 是**整个 etcd 数据库的全局版本号**，不是这个 ConfigMap 自己的。在它之前，集群中所有资源（Pod、Service、Node、各种 CRD）的每一次写操作都让 revision +1。换句话说，**整个 etcd 就是一个状态接一个状态地演进，revision 就是状态的序号。**
+
 这个映射关系看似简单，却是整个 K8s 并发控制和 watch 机制的基础。
 
 ### 乐观并发控制（Optimistic Concurrency Control）
 
-多个 Controller 或 API Server 实例同时修改同一个资源时，K8s 如何避免冲突？答案是基于 `resourceVersion` 的乐观锁。
+多个 Controller 或 API Server 实例同时修改同一个资源时，K8s 如何避免冲突？
 
-```
-  API Server A              etcd               API Server B
-      │                       │                      │
-      │── GET /pods/nginx ──→│                      │
-      │←─ {rv: 100, ...} ───│                      │
-      │                       │                      │
-      │                       │←── GET /pods/nginx ──│
-      │                       │──→ {rv: 100, ...} ──│
-      │                       │                      │
-      │── PUT /pods/nginx ──→│                      │
-      │   (if rv == 100)      │                      │
-      │←─ OK {rv: 101} ─────│                      │
-      │                       │                      │
-      │                       │←── PUT /pods/nginx ──│
-      │                       │    (if rv == 100)     │
-      │                       │──→ CONFLICT! ────────│
-      │                       │    (当前 rv=101≠100)   │
-      │                       │                      │
-      │                       │←── GET /pods/nginx ──│
-      │                       │──→ {rv: 101, ...} ──│
-      │                       │                      │
-      │                       │←── PUT /pods/nginx ──│
-      │                       │    (if rv == 101)     │
-      │                       │──→ OK {rv: 102} ────│
+锁有两种思路：**悲观锁**假设冲突随时会发生，读数据时就加锁，别人必须等我改完才能动；**乐观锁**假设冲突很少发生，不加锁，大家随便读随便改，但在写入时检查"我读到的版本和现在的版本还一致吗？"——如果一致就写入，如果被别人改过了就报冲突，重新来过。
+
+K8s 用的就是乐观锁，而 `resourceVersion` 就是那个"版本号"。
+
+```mermaid
+sequenceDiagram
+    participant A as API Server A
+    participant E as etcd
+    participant B as API Server B
+
+    A->>E: GET /pods/nginx
+    E-->>A: {rv: 100, ...}
+    B->>E: GET /pods/nginx
+    E-->>B: {rv: 100, ...}
+
+    A->>E: PUT /pods/nginx (if rv == 100)
+    E-->>A: OK {rv: 101}
+
+    B->>E: PUT /pods/nginx (if rv == 100)
+    E-->>B: CONFLICT! (当前 rv=101≠100)
+
+    B->>E: GET /pods/nginx
+    E-->>B: {rv: 101, ...}
+    B->>E: PUT /pods/nginx (if rv == 101)
+    E-->>B: OK {rv: 102}
 ```
 
 流程解读：
@@ -233,11 +271,13 @@ for resp := range watcher {
 
 如果每个 kubelet、Controller 都直接 watch etcd，etcd 会被压垮。所以 **API Server 充当了聚合层**：
 
-```
-Controller-1 ─┐                              
-Controller-2 ─┤── watch ──→ API Server ── 单个 watch ──→ etcd
-kubelet-1    ─┤            (watchCache)
-kubelet-2    ─┘
+```mermaid
+graph LR
+    C1[Controller-1] --> APIServer[API Server<br/>watchCache]
+    C2[Controller-2] --> APIServer
+    K1[kubelet-1] --> APIServer
+    K2[kubelet-2] --> APIServer
+    APIServer -->|单个 watch| etcd
 ```
 
 API Server 内部维护了 **watchCache**：
@@ -260,11 +300,31 @@ etcd 作为整个集群的核心存储，性能问题会被放大到全局。以
 
 etcd 默认限制单个请求大小为 1.5MB。当存储大型 ConfigMap、Secret 或 CRD 时：
 
-- **现象**：读写延迟飙升，etcd 内存占用异常
+- **现象**：读写延迟飙升，Controller watch 这些大对象时内存暴涨甚至 OOM。一个常见的场景是用 Secret 或 ConfigMap 存放 CA 证书，单个对象可能几十到几百 KB，Controller 的 informer 缓存会把所有 watch 到的对象完整加载到内存中
 - **优化**：
   - 避免在 ConfigMap/Secret 中存放大文件
   - 拆分大对象为多个小对象
   - 考虑将大数据放在外部存储（如 S3），etcd 只存引用
+  - **如果 Controller 只需要感知变化而不需要读取 data 部分**，使用 controller-runtime 的 `builder.OnlyMetadata` 选项。它让 informer 只缓存对象的 metadata（labels、annotations、ownerReferences 等），不缓存 spec 和 data，大幅降低内存占用：
+
+    ```go
+    // 只 watch Secret 的 metadata，不缓存 data 部分
+    ctrl.NewControllerManagedBy(mgr).
+        For(&myv1.MyResource{}).
+        Watches(&corev1.Secret{}, handler.EnqueueRequestForOwner(...),
+            builder.OnlyMetadata).
+        Complete(r)
+    ```
+
+    Reconcile 函数中需要用 `metav1.PartialObjectMetadata` 代替具体类型来读取：
+
+    ```go
+    secret := &metav1.PartialObjectMetadata{}
+    secret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+    client.Get(ctx, key, secret)
+    // secret.Labels, secret.Annotations 等可用
+    // secret.Data 不可用（需要时再用具体类型单独 Get）
+    ```
 
 ### 2. 频繁写入 / 磁盘 I/O
 
@@ -515,13 +575,21 @@ etcdctl put /health ok
 **根因**：API Server 的 watchCache 使用环形缓冲区存储事件。当事件产生速度超过 Controller 消费速度，旧事件被覆盖。Controller 尝试用过期的 `resourceVersion` 恢复 watch 时，API Server 发现该 revision 已不在缓存中。
 
 **时间线**：
-```
-Controller watch (rv=1000) ──→ 正常接收事件
-                              ··· 大量事件涌入 ···
-watchCache 缓冲区: [rv=5000 ... rv=8000]
-                              rv=1000 已被淘汰
-Controller 断线重连 (rv=4999) ──→ 410 Gone
-Controller 被迫 re-LIST ──→ 全量数据加载
+```mermaid
+sequenceDiagram
+    participant Ctrl as Controller
+    participant API as API Server<br/>watchCache
+
+    Ctrl->>API: watch (rv=1000)
+    API-->>Ctrl: 正常接收事件...
+
+    Note over API: 大量事件涌入<br/>缓冲区: [rv=5000...rv=8000]<br/>rv=1000 已被淘汰
+
+    Ctrl->>API: 断线重连 watch (rv=4999)
+    API-->>Ctrl: 410 Gone
+
+    Ctrl->>API: re-LIST (全量数据加载)
+    API-->>Ctrl: 返回全量数据
 ```
 
 **解决方案**：
